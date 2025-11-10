@@ -37,11 +37,17 @@ function rgbToLab(r, g, b) {
     var_Y = f(var_Y);
     var_Z = f(var_Z);
 
+    // L*a*b*値の計算
     let L = (116 * var_Y) - 16;
     let a = 500 * (var_X - var_Y);
     let b_star = 200 * (var_Y - var_Z);
     
-    return { l: L, a: a, b_star: b_star };
+    // 値を丸めて精度を保つ
+    return { 
+        l: parseFloat(L.toFixed(4)), 
+        a: parseFloat(a.toFixed(4)), 
+        b_star: parseFloat(b_star.toFixed(4)) 
+    };
 }
 
 
@@ -49,21 +55,28 @@ function rgbToLab(r, g, b) {
 self.onmessage = async (e) => {
     const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation } = e.data;
     const results = [];
-    const tileWidth = tileSize;
-    const tileHeight = tileSize;
     
+    // ★修正ポイント1: タイルブロックの縦横比を16:9に固定して計算★
+    const tileWidth = tileSize;
+    // 高さ = 幅 * (9 / 16)
+    const fixedAspectRatio = 9 / 16; 
+    const tileHeight = Math.round(tileWidth * fixedAspectRatio); 
+    const safeTileHeight = Math.max(tileHeight, 1); 
+
     const usageCount = new Map();
 
     self.postMessage({ type: 'status', message: 'ブロック解析とマッチング中 (L*a*b*)...' });
 
-    for (let y = 0; y < height; y += tileHeight) {
+    // ブロック分割に固定された safeTileHeight を使用
+    for (let y = 0; y < height; y += safeTileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
             // 1. ブロックの平均色を計算 (RGB)
             let r_sum = 0, g_sum = 0, b_sum = 0;
             let pixelCount = 0;
 
-            for (let py = y; py < Math.min(y + tileHeight, height); py++) {
+            // ブロック内のピクセル走査に safeTileHeight を使用
+            for (let py = y; py < Math.min(y + safeTileHeight, height); py++) {
                 for (let px = x; px < Math.min(x + tileWidth, width); px++) {
                     const i = (py * width + px) * 4;
                     r_sum += imageData.data[i];
@@ -112,8 +125,8 @@ self.onmessage = async (e) => {
                     x: x,
                     y: y,
                     width: Math.min(tileWidth, width - x), 
-                    height: Math.min(tileHeight, height - y),
-                    // ★重要: ブロックのターゲットL*値と、選ばれたタイルのL*値をメインスレッドに渡す★
+                    // 描画サイズに safeTileHeight を使用
+                    height: Math.min(safeTileHeight, height - y), 
                     targetL: main_lab.l,
                     tileL: bestMatch.l
                 });
@@ -122,7 +135,7 @@ self.onmessage = async (e) => {
             }
             
             // 進捗をメインスレッドに通知
-            if ((y * width + x) % (width * tileHeight * 5) === 0) {
+            if ((y * width + x) % (width * safeTileHeight * 5) === 0) {
                  self.postMessage({ type: 'progress', progress: (y * width + x) / (width * height) });
             }
         }
