@@ -1,9 +1,9 @@
 document.addEventListener('DOMContentLoaded', async () => {
+    // UI要素の取得（nullチェック回避のため、取得後にすぐチェックを追加）
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
     const mainCanvas = document.getElementById('main-canvas');
-    const ctx = mainCanvas.getContext('2d');
     const progressBar = document.getElementById('progress-fill');
     const statusText = document.getElementById('status-text');
     const tileSizeInput = document.getElementById('tile-size');
@@ -11,6 +11,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
+    // 全ての必須要素が存在するかチェック
+    if (!mainCanvas || !statusText || !generateButton) {
+        console.error("Initialization Error: One or more required HTML elements are missing.");
+        document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status) are missing from the HTML.</p>";
+        return;
+    }
+    
+    const ctx = mainCanvas.getContext('2d');
     let tileData = null;
     let mainImage = null;
 
@@ -19,9 +27,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     downloadButton.style.display = 'none';
 
     // 明度補正スライダーの値表示を更新
-    brightnessCompensationInput.addEventListener('input', () => {
-        brightnessCompensationValue.textContent = brightnessCompensationInput.value;
-    });
+    if (brightnessCompensationInput && brightnessCompensationValue) {
+        brightnessCompensationInput.addEventListener('input', () => {
+            brightnessCompensationValue.textContent = brightnessCompensationInput.value;
+        });
+    }
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -32,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileData = await response.json();
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚分) ロード完了。メイン画像を選択してください。`;
-        mainImageInput.disabled = false;
+        if (mainImageInput) mainImageInput.disabled = false;
     } catch (error) {
         statusText.textContent = `エラー: ${error.message}`;
         console.error("Initialization Error:", error);
@@ -40,29 +50,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // --- 2. メイン画像アップロード ---
-    mainImageInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    if (mainImageInput) {
+        mainImageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            mainImage = new Image();
-            mainImage.onload = () => {
-                generateButton.disabled = false;
-                downloadButton.style.display = 'none';
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                mainImage = new Image();
+                mainImage.onload = () => {
+                    generateButton.disabled = false;
+                    downloadButton.style.display = 'none';
 
-                // Canvasのサイズをメイン画像に合わせる
-                mainCanvas.width = mainImage.width;
-                mainCanvas.height = mainImage.height;
-                
-                ctx.clearRect(0, 0, mainImage.width, mainImage.height);
-                ctx.drawImage(mainImage, 0, 0); // プレビュー表示
-                statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
+                    // Canvasのサイズをメイン画像に合わせる
+                    mainCanvas.width = mainImage.width;
+                    mainCanvas.height = mainImage.height;
+                    
+                    ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+                    ctx.drawImage(mainImage, 0, 0); // プレビュー表示
+                    statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
+                };
+                mainImage.src = event.target.result;
             };
-            mainImage.src = event.target.result;
-        };
-        reader.readAsDataURL(file);
-    });
+            reader.readAsDataURL(file);
+        });
+    }
 
     // --- 3. モザイク生成開始 ---
     generateButton.addEventListener('click', () => {
@@ -79,11 +91,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCanvas.height = mainImage.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(mainImage, 0, 0);
-        // ImageDataをWorkerに転送するためにデータバッファを取得
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
         // Workerを起動
-        const worker = new Worker('mosaic_worker.js');
+        const worker = new Worker('mosaic_worker_v2.0.js'); // ★ファイル名をv2.0に修正
 
         // Workerにデータを送信
         worker.postMessage({ 
