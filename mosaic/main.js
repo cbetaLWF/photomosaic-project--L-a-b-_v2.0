@@ -93,8 +93,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
-        // Workerを起動
-        const worker = new Worker('mosaic_worker_v2.0.js'); // ★ファイル名をv2.0に修正
+        // Workerを起動 (互換性維持のため mosaic_worker.js を参照)
+        const worker = new Worker('mosaic_worker.js');
 
         // Workerにデータを送信
         worker.postMessage({ 
