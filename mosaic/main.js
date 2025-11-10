@@ -126,6 +126,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const totalTiles = results.length;
         const matchingProgress = 90; // マッチングは90%で完了済み
 
+        // --- 明度補正のための定数を定義 ---
+        const MIN_TILE_L = 5.0; // タイルのL*値の最小フロア (0に近いタイルによる不安定性を回避)
+        const MAX_BRIGHTNESS_RATIO = 3.0; // 明度補正の最大倍率 (極端な明るさで描画が崩れるのを防ぐ)
+
+
         // 描画に必要なタイル画像を非同期でロードし、描画する
         const renderPromises = results.map(tile => {
             return new Promise((resolve) => {
@@ -134,32 +139,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 img.onload = () => {
                     // ★ L*a*b*明度補正の計算と適用 ★
-                    // L*値は0-100の範囲。CSS filterのbrightness()は0-∞の倍率 (1.0が元の明るさ)
                     
-                    // 1. ターゲットL*とタイルのL*の差 (補正が必要な量)
-                    const deltaL = tile.targetL - tile.tileL;
+                    // 1. タイルのL*値に最小フロアを適用
+                    const safeTileL = Math.max(tile.tileL, MIN_TILE_L);
                     
-                    // 2. タイルをターゲットL*に近づけるための補正倍率
-                    // L*a*b*は線形ではないため複雑だが、ここでは簡易的に明度差をパーセントに変換
-                    // L*は0-100なので、タイルL*を基準とした比率を求める
-                    let compensationRatio = 1.0; 
+                    // 2. ターゲットL*と安全なタイルL*から基本補正倍率を算出
+                    let compensationRatio = tile.targetL / safeTileL;
 
-                    if (tile.tileL > 0) {
-                        // ターゲットL*をタイルL*で割ることで倍率を算出
-                        compensationRatio = tile.targetL / tile.tileL;
-                    }
-                    
-                    // 3. ユーザー設定の強度で補正を調整 (0%〜200%)
+                    // 3. 基本倍率を安全な範囲にクランプ（制限）
+                    compensationRatio = Math.min(compensationRatio, MAX_BRIGHTNESS_RATIO);
+                    compensationRatio = Math.max(compensationRatio, 0.2); // 過度な暗さも防止
+
+                    // 4. ユーザー設定の強度で補正を調整 (1.0が元の明るさ)
                     const finalBrightness = 1.0 + (compensationRatio - 1.0) * brightnessCompensation;
                     
-                    // 4. CSSフィルターをCanvasに適用
-                    // 注意: フィルターはCanvas全体に影響するため、タイルごとに描画とリセットが必要
+                    // 5. CSSフィルターをCanvasに適用
                     ctx.filter = `brightness(${finalBrightness})`;
 
                     // 描画 (高解像度のタイルを縮小して描画)
                     ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
                     
-                    // フィルターをリセット (次のタイルに影響を与えないように)
+                    // 6. フィルターをリセット (次のタイルに影響を与えないように)
                     ctx.filter = 'none';
 
                     loadedCount++;
