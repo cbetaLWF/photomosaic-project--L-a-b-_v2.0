@@ -79,12 +79,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCanvas.height = mainImage.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(mainImage, 0, 0);
+        // ImageDataをWorkerに転送するためにデータバッファを取得
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
         // Workerを起動
         const worker = new Worker('mosaic_worker.js');
 
-        // Workerにデータを送信 (ImageDataは転送可能オブジェクト)
+        // Workerにデータを送信
         worker.postMessage({ 
             imageData: imageData, 
             tileData: tileData, 
@@ -103,7 +104,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const progress = Math.round(e.data.progress * 100);
                 progressBar.style.width = `${progress}%`;
             } else if (e.data.type === 'complete') {
-                // 明度補正設定とブレンド設定をWorkerの結果から取得
                 const { results, width, height, blendOpacity, brightnessCompensation } = e.data;
                 renderMosaic(results, width, height, blendOpacity, brightnessCompensation);
                 worker.terminate();
@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const promises = [];
         
         // --- 明度補正のための安全装置設定 ---
-        const MIN_TILE_L = 5.0; // タイルのL*値がこの値未満の場合、明度補正を制限 (L*a*b*のL*は0-100)
+        const MIN_TILE_L = 5.0; // タイルのL*値がこの値未満の場合、明度補正を制限 (0-100)
         const MAX_BRIGHTNESS_RATIO = 5.0; // 最大補正倍率を500%に制限
         const brightnessFactor = brightnessCompensation / 100; // 補正の適用度 (0.0 to 1.0)
 
@@ -143,7 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     let targetL = tile.targetL; // ブロックのL*値
                     let tileL = tile.tileL; // タイル画像のL*値
 
-                    // L*値を0-100の範囲で扱うため、0.01以上の最小値を強制
+                    // L*値を0-100の範囲で扱うため、最小値を強制
                     if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
 
                     // 必要な明るさの倍率を計算 (目標L* / タイルL*)
@@ -174,9 +174,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     resolve();
                 };
                 img.onerror = () => {
-                    // 画像ロード失敗時: エラーログを出し、四角形で埋める
+                    // 画像ロード失敗時: エラーログを出し、灰色で埋める
                     console.error(`タイル画像のロードに失敗: ${tile.url}`);
-                    ctx.fillStyle = `rgb(${Math.round(tile.targetL * 2.55)}, ${Math.round(tile.targetL * 2.55)}, ${Math.round(tile.targetL * 2.55)})`; // L*をRGBに変換して灰色で埋める
+                    // ターゲットL*からRGBに変換し、失敗ブロックを埋める
+                    const grayValue = Math.round(tile.targetL * 2.55); 
+                    ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
                     ctx.fillRect(tile.x, tile.y, tile.width, tile.height);
                     loadedCount++;
                     progressBar.style.width = `${Math.round(loadedCount / totalTiles * 100)}%`;
