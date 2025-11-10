@@ -2,83 +2,76 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>フォトモザイク生成アプリ</title>
     <style>
-        body { font-family: 'Inter', sans-serif; padding: 20px; background-color: #f4f7f9; color: #333; }
-        h1 { color: #1e3a8a; margin-bottom: 20px; }
-        #controls { margin-bottom: 25px; padding: 20px; border: 1px solid #ccc; background-color: #fff; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }
-        .control-group { margin-bottom: 15px; border-bottom: 1px dashed #eee; padding-bottom: 10px; }
-        label { display: block; font-weight: bold; margin-bottom: 5px; color: #3b82f6; }
-        input[type="range"], input[type="number"] { width: calc(100% - 100px); margin-left: 10px; vertical-align: middle; }
-        input[type="number"] { width: 80px; padding: 5px; border: 1px solid #ddd; border-radius: 5px; }
+        body { font-family: 'Inter', sans-serif; padding: 20px; background-color: #f7f7f7; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; background-color: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h1 { color: #1e40af; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; margin-bottom: 20px; }
+        #controls { display: flex; flex-direction: column; gap: 15px; margin-bottom: 30px; }
+        .control-group { background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
+        .control-group label { font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        #controls button { padding: 10px 20px; background-color: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background-color 0.2s; }
+        #controls button:disabled { background-color: #93c5fd; cursor: not-allowed; }
+        #controls button:hover:enabled { background-color: #2563eb; }
         
-        #generate-button {
-            background-color: #10b981;
-            color: white;
-            padding: 12px 25px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            font-size: 16px;
-            font-weight: bold;
-            width: 100%;
-            margin-top: 10px;
-        }
-        #generate-button:disabled { background-color: #9ca3af; cursor: not-allowed; }
-
-        #progress-bar { width: 100%; height: 20px; background: #e5e7eb; border-radius: 10px; margin-top: 15px; overflow: hidden; }
-        #progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.4s ease-out; }
+        #progress-bar { width: 100%; height: 10px; background: #e0e7ff; border-radius: 5px; margin-top: 10px; overflow: hidden; }
+        #progress-fill { height: 100%; width: 0%; background: #4f46e5; transition: width 0.3s; }
         #status-text { margin-top: 10px; font-style: italic; color: #6b7280; }
 
-        #main-canvas { border: 2px solid #ccc; display: block; margin: 25px auto; max-width: 100%; border-radius: 10px; box-shadow: 0 0 15px rgba(0, 0, 0, 0.1); }
-        #download-button {
-            background-color: #f97316;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            margin-top: 15px;
+        #main-canvas { 
+            border: 1px solid #ccc; 
             display: block; 
-            margin-left: auto;
-            margin-right: auto;
-            font-weight: bold;
+            margin: 20px auto; 
+            max-width: 100%; 
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
         }
     </style>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body>
-    <h1>✨ L*a*b*明度補正フォトモザイク</h1>
-
-    <div id="controls">
-        <input type="file" id="main-image-input" accept="image/*">
+    <div class="container">
+        <h1 class="text-3xl">フォトモザイク生成 (Mosaic App)</h1>
         
-        <div class="control-group">
-            <label for="tile-size">タイルサイズ (px): <span id="tile-size-value">30</span></label>
-            <input type="range" id="tile-size" min="10" max="60" value="30">
+        <div id="controls">
+            <div class="control-group">
+                <label for="main-image-input">ステップ1: メイン画像をアップロード (16:9推奨)</label>
+                <input type="file" id="main-image-input" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
+            </div>
+
+            <div class="control-group grid md:grid-cols-3 gap-4">
+                <div>
+                    <label for="tile-size">タイル幅 (px):</label>
+                    <input type="number" id="tile-size" value="20" min="10" max="100" class="w-full p-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">タイル高さは自動的に16:9比率に調整されます。</p>
+                </div>
+                <div>
+                    <label for="blend-range">ブレンド度 (元画像の透明度 %): <span id="blend-value">30</span>%</label>
+                    <input type="range" id="blend-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('blend-value').textContent = this.value">
+                </div>
+                <div>
+                    <label for="brightness-compensation">L*明度補正の適用度 (%): <span id="brightness-compensation-value">100</span>%</label>
+                    <input type="range" id="brightness-compensation" min="0" max="100" value="100" class="w-full" oninput="document.getElementById('brightness-compensation-value').textContent = this.value">
+                    <p class="text-xs text-gray-500 mt-1">100%でターゲットL*に完全に一致。</p>
+                </div>
+            </div>
+            
+            <button id="generate-button" disabled>ステップ2: モザイク生成開始</button>
         </div>
 
-        <div class="control-group">
-            <label for="blend-range">ブレンド度 (元の画像の不透明度, %): <span id="blend-range-value">30</span></label>
-            <input type="range" id="blend-range" min="0" max="50" value="30">
+        <div id="progress-area">
+            <div id="progress-bar"><div id="progress-fill"></div></div>
+            <p id="status-text">ステータス: タイルデータロード待ち...</p>
         </div>
 
-        <div class="control-group">
-            <label for="brightness-comp">明度補正強度 (%): <span id="brightness-comp-value">100</span></label>
-            <input type="range" id="brightness-comp" min="0" max="200" value="100">
-            <p style="font-size: 12px; color: #ef4444; margin-top: 5px;">※ 100%でターゲットL*に完全一致。0%で補正なし（タイル本来の明るさ）。</p>
-        </div>
-
-        <button id="generate-button" disabled>モザイク生成開始</button>
+        <canvas id="main-canvas"></canvas>
+        <button id="download-button" style="display: none;" class="w-full p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-md transition-colors">結果をダウンロード (PNG/ロスレス)</button>
     </div>
 
-    <div id="progress-bar"><div id="progress-fill"></div></div>
-    <p id="status-text">ステータス: タイルデータロード待ち...</p>
-
-    <canvas id="main-canvas"></canvas>
-    <button id="download-button" style="display: none;">結果をダウンロード (JPEG)</button>
-
+    <!-- JavaScript Files -->
     <script src="main.js"></script>
-    <script src="mosaic_worker.js"></script>
+    <script src="mosaic_worker.js"></script> 
 </body>
 </html>
