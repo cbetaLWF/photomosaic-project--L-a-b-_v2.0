@@ -86,13 +86,23 @@ self.onmessage = async (e) => {
             let bestMatch = null;
             let minDistance = Infinity;
             
+            // L*成分の重み (明度補正を前提とし、L*の影響を大幅に減らす)
+            const L_WEIGHT = 0.05; 
+            // a*b*成分の重み (色相優先のため、L*の2倍の重み、つまり標準の200%とする)
+            const AB_WEIGHT = 2.0; 
+            
             for (const tile of tileData) {
-                // L*a*b*距離 (知覚距離)
+                // L*a*b*距離の計算
                 const dL = targetLab.l - tile.l;
                 const dA = targetLab.a - tile.a;
                 const dB = targetLab.b_star - tile.b_star;
                 
-                let distance = Math.sqrt(dL * dL + dA * dA + dB * dB);
+                // 重み付けされた距離を計算: 色相(a*b*)を優先し、L*の影響を最小限にする
+                let distance = Math.sqrt(
+                    (L_WEIGHT * dL * dL) +         // L*の差
+                    (AB_WEIGHT * dA * dA) +        // a*の差 (色相/彩度) - 2倍に強調
+                    (AB_WEIGHT * dB * dB)          // b*の差 (色相/彩度) - 2倍に強調
+                );
                 
                 // 公平性のためのペナルティ (使用回数が多いタイルを避ける)
                 const count = usageCount.get(tile.url) || 0;
