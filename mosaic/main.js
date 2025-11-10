@@ -3,39 +3,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
     const mainCanvas = document.getElementById('main-canvas');
-    const ctx = mainCanvas.getContext('2d', { willReadFrequently: true });
+    const ctx = mainCanvas.getContext('2d');
     const progressBar = document.getElementById('progress-fill');
     const statusText = document.getElementById('status-text');
-    
-    // UIコントロール
     const tileSizeInput = document.getElementById('tile-size');
     const blendRangeInput = document.getElementById('blend-range');
-    const brightnessCompInput = document.getElementById('brightness-comp');
+    const brightnessCompensationInput = document.getElementById('brightness-compensation');
+    const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
-    // UI値表示の更新
-    document.getElementById('tile-size-value').textContent = tileSizeInput.value;
-    document.getElementById('blend-range-value').textContent = blendRangeInput.value;
-    document.getElementById('brightness-comp-value').textContent = brightnessCompInput.value;
-
-    tileSizeInput.addEventListener('input', (e) => document.getElementById('tile-size-value').textContent = e.target.value);
-    blendRangeInput.addEventListener('input', (e) => document.getElementById('blend-range-value').textContent = e.target.value);
-    brightnessCompInput.addEventListener('input', (e) => document.getElementById('brightness-comp-value').textContent = e.target.value);
-
-
     let tileData = null;
     let mainImage = null;
-    let currentResults = null; // 最新のモザイク結果を保持
+
+    // --- UIの初期設定 ---
+    generateButton.disabled = true;
+    downloadButton.style.display = 'none';
+
+    // 明度補正スライダーの値表示を更新
+    brightnessCompensationInput.addEventListener('input', () => {
+        brightnessCompensationValue.textContent = brightnessCompensationInput.value;
+    });
 
     // --- 1. タイルデータの初期ロード ---
     try {
+        statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
         if (!response.ok) {
-            throw new Error('tile_data.json のロードに失敗しました。ファイルが /mosaic/ に配置されているか確認してください。');
+            throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。Analyzer Appでデータを作成し、/mosaic/フォルダに配置してください。`);
         }
         tileData = await response.json();
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚分) ロード完了。メイン画像を選択してください。`;
+        mainImageInput.disabled = false;
     } catch (error) {
-        statusText.textContent = `致命的エラー: ${error.message}`;
+        statusText.textContent = `エラー: ${error.message}`;
+        console.error("Initialization Error:", error);
         return;
     }
     
@@ -49,8 +49,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             mainImage = new Image();
             mainImage.onload = () => {
                 generateButton.disabled = false;
+                downloadButton.style.display = 'none';
+
+                // Canvasのサイズをメイン画像に合わせる
                 mainCanvas.width = mainImage.width;
                 mainCanvas.height = mainImage.height;
+                
                 ctx.clearRect(0, 0, mainImage.width, mainImage.height);
                 ctx.drawImage(mainImage, 0, 0); // プレビュー表示
                 statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
@@ -80,27 +84,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Workerを起動
         const worker = new Worker('mosaic_worker.js');
 
-        // Workerにデータを送信
+        // Workerにデータを送信 (ImageDataは転送可能オブジェクト)
         worker.postMessage({ 
             imageData: imageData, 
             tileData: tileData, 
             tileSize: parseInt(tileSizeInput.value),
             width: mainImage.width,
             height: mainImage.height,
-            blendOpacity: parseInt(blendRangeInput.value) / 100,
-            brightnessCompensation: parseInt(brightnessCompInput.value) / 100
-        });
+            blendOpacity: parseInt(blendRangeInput.value),
+            brightnessCompensation: parseInt(brightnessCompensationInput.value)
+        }, [imageData.data.buffer]); // バッファ転送で高速化
 
         // Workerからのメッセージ受信
         worker.onmessage = (e) => {
             if (e.data.type === 'status') {
                 statusText.textContent = `ステータス: ${e.data.message}`;
             } else if (e.data.type === 'progress') {
-                const progress = Math.round(e.data.progress * 100 * 0.9); // マッチングは全体の90%
+                const progress = Math.round(e.data.progress * 100);
                 progressBar.style.width = `${progress}%`;
             } else if (e.data.type === 'complete') {
-                currentResults = e.data; // 結果を保存
-                renderMosaic(e.data); // 描画処理を実行
+                // 明度補正設定とブレンド設定をWorkerの結果から取得
+                const { results, width, height, blendOpacity, brightnessCompensation } = e.data;
+                renderMosaic(results, width, height, blendOpacity, brightnessCompensation);
                 worker.terminate();
             }
         };
@@ -109,108 +114,109 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.textContent = `エラー: Worker処理中に問題が発生しました。 ${error.message}`;
             generateButton.disabled = false;
             worker.terminate();
+            console.error("Worker Error:", error);
         };
     });
 
     // --- 4. 最終的なモザイクの描画 ---
-    async function renderMosaic(data) {
-        const { results, width, height, blendOpacity, brightnessCompensation } = data;
-
-        statusText.textContent = 'ステータス: タイル画像をロードし、明度補正を適用して描画中...';
+    async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
+        statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
         mainCanvas.height = height;
         ctx.clearRect(0, 0, width, height);
-        
-        // 描画の準備
+
         let loadedCount = 0;
         const totalTiles = results.length;
-        const matchingProgress = 90; // マッチングは90%で完了済み
-
-        // --- 明度補正のための定数を定義 ---
-        const MIN_TILE_L = 5.0; // タイルのL*値の最小フロア (0に近いタイルによる不安定性を回避)
-        const MAX_BRIGHTNESS_RATIO = 3.0; // 明度補正の最大倍率 (極端な明るさで描画が崩れるのを防ぐ)
-
+        const promises = [];
+        
+        // --- 明度補正のための安全装置設定 ---
+        const MIN_TILE_L = 5.0; // タイルのL*値がこの値未満の場合、明度補正を制限 (L*a*b*のL*は0-100)
+        const MAX_BRIGHTNESS_RATIO = 5.0; // 最大補正倍率を500%に制限
+        const brightnessFactor = brightnessCompensation / 100; // 補正の適用度 (0.0 to 1.0)
 
         // 描画に必要なタイル画像を非同期でロードし、描画する
-        const renderPromises = results.map(tile => {
-            return new Promise((resolve) => {
+        for (const tile of results) {
+            const p = new Promise((resolve) => {
                 const img = new Image();
-                img.crossOrigin = 'anonymous'; 
-
                 img.onload = () => {
-                    // ★ L*a*b*明度補正の計算と適用 ★
-                    
-                    // 1. タイルのL*値に最小フロアを適用
-                    const safeTileL = Math.max(tile.tileL, MIN_TILE_L);
-                    
-                    // 2. ターゲットL*と安全なタイルL*から基本補正倍率を算出
-                    let compensationRatio = tile.targetL / safeTileL;
+                    // --- 明度補正の計算 ---
+                    let targetL = tile.targetL; // ブロックのL*値
+                    let tileL = tile.tileL; // タイル画像のL*値
 
-                    // 3. 基本倍率を安全な範囲にクランプ（制限）
-                    compensationRatio = Math.min(compensationRatio, MAX_BRIGHTNESS_RATIO);
-                    compensationRatio = Math.max(compensationRatio, 0.2); // 過度な暗さも防止
+                    // L*値を0-100の範囲で扱うため、0.01以上の最小値を強制
+                    if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
 
-                    // 4. ユーザー設定の強度で補正を調整 (1.0が元の明るさ)
-                    const finalBrightness = 1.0 + (compensationRatio - 1.0) * brightnessCompensation;
+                    // 必要な明るさの倍率を計算 (目標L* / タイルL*)
+                    let brightnessRatio = targetL / tileL; 
+
+                    // 補正倍率にクランプ処理 (最大補正倍率の制限)
+                    if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
+                        brightnessRatio = MAX_BRIGHTNESS_RATIO;
+                    }
+
+                    // 最終的なフィルター値 (元の明るさに対する補正倍率)
+                    // 補正係数を考慮: 補正が100% (factor=1)なら完全に一致、0%なら補正なし
+                    const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
                     
-                    // 5. CSSフィルターをCanvasに適用
-                    ctx.filter = `brightness(${finalBrightness})`;
+                    // --- 描画 ---
+                    // Canvas filterプロパティで明度補正を適用
+                    ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
 
-                    // 描画 (高解像度のタイルを縮小して描画)
+                    // 高解像度タイルを縮小して描画
                     ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
                     
-                    // 6. フィルターをリセット (次のタイルに影響を与えないように)
+                    // フィルターをリセット (次のタイルに影響を与えないように)
                     ctx.filter = 'none';
 
                     loadedCount++;
-                    // 進捗バーを更新 (マッチングの90%から開始)
-                    const totalProgress = matchingProgress + Math.round((loadedCount / totalTiles) * 10); 
-                    progressBar.style.width = `${totalProgress}%`;
-                    
+                    // ロード進捗を更新
+                    progressBar.style.width = `${Math.round(loadedCount / totalTiles * 100)}%`;
                     resolve();
                 };
                 img.onerror = () => {
+                    // 画像ロード失敗時: エラーログを出し、四角形で埋める
                     console.error(`タイル画像のロードに失敗: ${tile.url}`);
-                    // 失敗した場所を代替色で塗りつぶす (デバッグ用)
-                    ctx.fillStyle = `rgba(${tile.r}, ${tile.g}, ${tile.b}, 0.5)`;
+                    ctx.fillStyle = `rgb(${Math.round(tile.targetL * 2.55)}, ${Math.round(tile.targetL * 2.55)}, ${Math.round(tile.targetL * 2.55)})`; // L*をRGBに変換して灰色で埋める
                     ctx.fillRect(tile.x, tile.y, tile.width, tile.height);
                     loadedCount++;
-                    const totalProgress = matchingProgress + Math.round((loadedCount / totalTiles) * 10); 
-                    progressBar.style.width = `${totalProgress}%`;
+                    progressBar.style.width = `${Math.round(loadedCount / totalTiles * 100)}%`;
                     resolve(); 
                 };
                 img.src = tile.url; 
             });
-        });
-
-        // すべてのタイルが描画された後、ブレンド処理を実行
-        Promise.all(renderPromises).then(() => {
-            applyBlend(width, height, blendOpacity); // ブレンド処理を実行
-            
-            statusText.textContent = 'ステータス: モザイクアートが完成しました！';
-            generateButton.disabled = false;
-            downloadButton.style.display = 'block';
-            progressBar.style.width = '100%';
-        });
-    }
-
-    // --- 5. ブレンド処理の関数化 ---
-    function applyBlend(width, height, opacity) {
-        if (opacity > 0) {
-            // 元の画像を半透明で重ねるブレンド処理
-            ctx.globalAlpha = opacity;
-            ctx.drawImage(mainImage, 0, 0, width, height);
-            ctx.globalAlpha = 1.0; // 元に戻す
+            promises.push(p);
         }
+
+        // すべてのタイルが描画された後、ブレンド処理
+        await Promise.all(promises);
+
+        // --- ブレンド処理 ---
+        if (blendOpacity > 0) {
+            // ブレンドモード: Multiply (陰影を強調)
+            ctx.globalCompositeOperation = 'multiply'; 
+            ctx.globalAlpha = blendOpacity / 100;
+
+            // 元画像をフルサイズで描画
+            ctx.drawImage(mainImage, 0, 0, width, height);
+
+            // 元に戻す
+            ctx.globalCompositeOperation = 'source-over'; 
+            ctx.globalAlpha = 1.0; 
+        }
+
+        statusText.textContent = 'ステータス: モザイクアートが完成しました！';
+        generateButton.disabled = false;
+        downloadButton.style.display = 'block';
+        progressBar.style.width = '100%';
     }
 
-    // --- 6. ダウンロード機能 ---
+    // --- 5. ダウンロード機能 (PNG形式) ---
     downloadButton.addEventListener('click', () => {
-        // JPEG形式、品質90%でエクスポート
-        const dataURL = mainCanvas.toDataURL('image/jpeg', 0.9); 
+        // PNG形式 (ロスレス) でダウンロード
+        const dataURL = mainCanvas.toDataURL('image/png'); 
         const a = document.createElement('a');
         a.href = dataURL;
-        a.download = `photomosaic-${Date.now()}.jpg`;
+        a.download = `photomosaic-${Date.now()}.png`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
