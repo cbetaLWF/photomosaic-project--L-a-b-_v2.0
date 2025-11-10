@@ -88,8 +88,13 @@ self.onmessage = async (e) => {
             
             // L*成分の重み (明度補正を前提とし、L*の影響を大幅に減らす)
             const L_WEIGHT = 0.05; 
-            // a*b*成分の重み (色相優先のため、L*の2倍の重み、つまり標準の200%とする)
+            // a*b*成分の重み (色相優先のため、L*の2倍の重み)
             const AB_WEIGHT = 2.0; 
+            // 彩度ペナルティの係数
+            const CHROMA_PENALTY_FACTOR = 0.5; // 彩度差10ごとにペナルティを加える (調整可能)
+
+            // ブロックのターゲット彩度 C* を計算
+            const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
             
             for (const tile of tileData) {
                 // L*a*b*距離の計算
@@ -97,17 +102,27 @@ self.onmessage = async (e) => {
                 const dA = targetLab.a - tile.a;
                 const dB = targetLab.b_star - tile.b_star;
                 
-                // 重み付けされた距離を計算: 色相(a*b*)を優先し、L*の影響を最小限にする
+                // --- 1. 重み付けされたL*a*b*距離 ---
                 let distance = Math.sqrt(
-                    (L_WEIGHT * dL * dL) +         // L*の差
-                    (AB_WEIGHT * dA * dA) +        // a*の差 (色相/彩度) - 2倍に強調
-                    (AB_WEIGHT * dB * dB)          // b*の差 (色相/彩度) - 2倍に強調
+                    (L_WEIGHT * dL * dL) +         
+                    (AB_WEIGHT * dA * dA) +        
+                    (AB_WEIGHT * dB * dB)          
                 );
                 
-                // 公平性のためのペナルティ (使用回数が多いタイルを避ける)
+                // --- 2. 彩度ペナルティの計算 (C*) ---
+                const tileChroma = Math.sqrt(tile.a * tile.a + tile.b_star * tile.b_star);
+                const chromaDifference = Math.abs(targetChroma - tileChroma);
+                
+                // 彩度差が大きいほど、距離に大きなペナルティを加算
+                const chromaPenalty = chromaDifference * CHROMA_PENALTY_FACTOR;
+
+                distance += chromaPenalty;
+
+
+                // --- 3. 公平性のためのペナルティ ---
                 const count = usageCount.get(tile.url) || 0;
-                const penaltyFactor = 5; // 調整可能な係数
-                distance += count * penaltyFactor; 
+                const fairnessPenalty = count * 5; // 調整可能な係数
+                distance += fairnessPenalty; 
 
                 if (distance < minDistance) {
                     minDistance = distance;
