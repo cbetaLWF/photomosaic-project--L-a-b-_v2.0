@@ -10,20 +10,27 @@
         #controls { margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         h1 { font-size: 1.8rem; font-weight: 700; color: #1d4ed8; margin-bottom: 10px; }
         label { font-weight: 600; display: block; margin-bottom: 5px; color: #4b5563; }
-        input[type="number"], input[type="range"] { width: 100%; }
-        button { background-color: #3b82f6; color: white; padding: 10px 15px; border-radius: 8px; font-weight: 600; transition: background-color 0.2s; cursor: pointer; }
-        button:hover:not(:disabled) { background-color: #2563eb; }
+        input[type=\"number\"], input[type=\"range\"] { width: 100%; }
+        button { background-color: #3b82f6; color: white; padding: 10px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background-color 0.3s; }
+        button:hover:not([disabled]) { background-color: #2563eb; }
         button:disabled { background-color: #93c5fd; cursor: not-allowed; }
-        #main-canvas { border: 2px solid #e5e7eb; display: block; margin: 20px auto; max-width: 100%; height: auto; border-radius: 8px; }
-        #progress-bar { width: 100%; height: 20px; background: #e5e7eb; border-radius: 10px; margin-top: 15px; overflow: hidden; }
-        #progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #10b981, #059669); border-radius: 10px; transition: width 0.3s; }
+        
+        /* 【★修正箇所★】 height: auto; の指定を削除しました。
+           JavaScriptで設定される canvas 要素の width/height 属性の比率を優先させます。 */
+        #main-canvas { border: 2px solid #e5e7eb; display: block; margin: 20px auto; max-width: 100%; border-radius: 8px; }
+
+        /* プログレスバーのスタイル */
+        #progress-bar { width: 100%; background-color: #e0e7ff; border-radius: 4px; overflow: hidden; height: 10px; margin-top: 10px; }
+        #progress-fill { height: 100%; width: 0%; background-color: #3b82f6; transition: width 0.3s; }
+        #status-text { margin-top: 10px; font-size: 0.9rem; color: #4b5563; }
+        #download-button { display: none; background-color: #10b981; margin-top: 15px; }
+        #download-button:hover:not([disabled]) { background-color: #059669; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>フォトモザイク生成アプリ</h1>
-        <p class="text-gray-600 mb-5">メイン画像をアップロードし、タイルアートを生成します。</p>
-
+        
         <div id="controls" class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="md:col-span-1">
                 <label for="main-image-input">メイン画像を選択</label>
@@ -45,15 +52,15 @@
 
         <button id="generate-button" disabled class="w-full mt-4">モザイク生成開始</button>
 
-        <div id="progress-bar"><div id="progress-fill"></div></div>
-        <p id="status-text" class="text-sm mt-3 text-center">ステータス: タイルデータロード待ち...</p>
+        <div id="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+        <p id="status-text">ステータス: タイルデータのロードを待機中...</p>
+
+        <canvas id="main-canvas"></canvas>
+        <button id="download-button" class="w-full">モザイク画像をダウンロード (JPEG)</button>
     </div>
 
-    <!-- 結果表示エリア -->
-    <canvas id="main-canvas" class="mt-4"></canvas>
-    <button id="download-button" style="display: none;" class="mt-4 bg-green-600 hover:bg-green-700">結果をダウンロード</button>
-
     <script src="main.js"></script>
-    <script src="mosaic_worker.js"></script> 
 </body>
 </html>
