@@ -4,83 +4,47 @@
     <meta charset="UTF-8">
     <title>タイル画像解析アプリ</title>
     <style>
-        body { font-family: 'Inter', sans-serif; padding: 20px; background-color: #f4f7f9; color: #333; }
-        h1 { color: #1e3a8a; }
+        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
         #drop-area { 
-            border: 4px dashed #93c5fd; 
-            background-color: #eff6ff; 
-            padding: 60px 20px; 
+            border: 2px dashed #ccc; 
+            padding: 50px; 
             text-align: center; 
-            cursor: pointer; 
-            margin-bottom: 20px; 
-            border-radius: 12px;
-            transition: background-color 0.2s;
-        }
-        #drop-area:hover { background-color: #dbeafe; }
-        input[type="number"] {
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            width: 80px;
-        }
-        button {
-            background-color: #10b981;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
             cursor: pointer;
-            transition: background-color 0.2s;
+            margin-bottom: 20px;
+        }
+        #controls button {
+            padding: 10px 20px;
             margin-right: 10px;
-        }
-        #download-json-button {
-            background-color: #f97316;
-        }
-        button:disabled {
-            background-color: #9ca3af;
-            cursor: not-allowed;
         }
         #log { 
             margin-top: 20px; 
             white-space: pre-wrap; 
-            background: #fff; 
-            border: 1px solid #e5e7eb;
+            background: #f4f4f4; 
             padding: 15px; 
-            height: 200px; 
-            overflow-y: scroll;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .info {
-            background-color: #fef3c7;
-            border: 1px solid #fde68a;
-            padding: 10px;
-            border-radius: 6px;
-            margin-bottom: 15px;
-            color: #92400e;
+            min-height: 150px; 
+            overflow-y: auto;
+            border-radius: 5px;
+            border: 1px solid #ddd;
         }
     </style>
 </head>
 <body>
-    <h1>🖼️ タイル画像解析 (Analyzer App)</h1>
-    <p>モザイクに使用するタイル画像をここにアップロードし、平均色データを抽出します。</p>
-    
-    <div class="info">
-        <small><strong>ファイル名について:</strong> アップロードしたファイル名をそのまま利用します。タイル画像のリネームは不要です。</small>
-    </div>
+    <h1>タイル画像解析 (Analyzer App)</h1>
+    <p>フォルダまたは画像ファイルをまとめてドラッグ＆ドロップしてください。解析後、JSONをダウンロードし、画像ファイルを /mosaic/tiles/ に移動させてください。</p>
     
     <div id="drop-area">
-        画像をここにドラッグ＆ドロップ（複数選択またはフォルダドロップ可）
+        タイル画像をここにドラッグ＆ドロップ
     </div>
-    
-    <div>
+
+    <div id="controls">
         <button id="start-analysis" disabled>解析開始</button>
         <button id="download-json-button" disabled>JSONをダウンロード</button>
     </div>
-    
+
     <div id="log">ログ: 解析を待機中...</div>
 
-    <script src="analyzer.js"></script>
-    <script src="worker.js"></script>
+    <!-- Workerスクリプトを読み込む -->
+    <script src="analyzer_v2.0.js"></script>
+    <script src="worker_v2.0.js"></script> 
 </body>
 </html>
