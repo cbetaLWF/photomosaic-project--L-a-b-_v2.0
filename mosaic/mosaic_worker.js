@@ -47,17 +47,15 @@ function rgbToLab(r, g, b) {
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    const { imageData, tileData, tileSize, width, height, blendOpacity } = e.data;
+    const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation } = e.data;
     const results = [];
     const tileWidth = tileSize;
     const tileHeight = tileSize;
     
-    // タイルの使用回数を記録し、公平性を確保するためのマップ
     const usageCount = new Map();
 
-    self.postMessage({ type: 'status', message: 'ブロック解析とマッチング中...' });
+    self.postMessage({ type: 'status', message: 'ブロック解析とマッチング中 (L*a*b*)...' });
 
-    // --- メインループ ---
     for (let y = 0; y < height; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
@@ -81,7 +79,7 @@ self.onmessage = async (e) => {
             const g_avg = g_sum / pixelCount;
             const b_avg = b_sum / pixelCount;
             
-            // 2. ブロックの平均RGBをL*a*b*に変換
+            // 2. ブロックの平均RGBをL*a*b*に変換 (ターゲットL*値を取得)
             const main_lab = rgbToLab(r_avg, g_avg, b_avg);
 
             // 3. 最適なタイルをL*a*b*距離で検索
@@ -89,12 +87,11 @@ self.onmessage = async (e) => {
             let minDistance = Infinity;
             
             for (const tile of tileData) {
-                // L*a*b*距離 (知覚的に正確な色差) を使用
+                // L*a*b* ユークリッド距離 (Delta E)
                 const dL = main_lab.l - tile.l;
                 const dA = main_lab.a - tile.a;
                 const dB = main_lab.b_star - tile.b_star;
                 
-                // L*a*b* ユークリッド距離
                 let distance = Math.sqrt(dL * dL + dA * dA + dB * dB); 
                 
                 // 公平性のためのペナルティ
@@ -108,14 +105,17 @@ self.onmessage = async (e) => {
                 }
             }
 
-            // 4. 結果を格納
+            // 4. 結果を格納 (ターゲットL*とタイルのL*を格納)
             if (bestMatch) {
                 results.push({
                     url: bestMatch.url,
                     x: x,
                     y: y,
                     width: Math.min(tileWidth, width - x), 
-                    height: Math.min(tileHeight, height - y)
+                    height: Math.min(tileHeight, height - y),
+                    // ★重要: ブロックのターゲットL*値と、選ばれたタイルのL*値をメインスレッドに渡す★
+                    targetL: main_lab.l,
+                    tileL: bestMatch.l
                 });
                 // 使用回数を更新
                 usageCount.set(bestMatch.url, (usageCount.get(bestMatch.url) || 0) + 1);
@@ -129,5 +129,12 @@ self.onmessage = async (e) => {
     }
 
     // 完了と結果を送信
-    self.postMessage({ type: 'complete', results: results, width: width, height: height, blendOpacity: blendOpacity });
+    self.postMessage({ 
+        type: 'complete', 
+        results: results, 
+        width: width, 
+        height: height, 
+        blendOpacity: blendOpacity,
+        brightnessCompensation: brightnessCompensation // 明度補正設定もメインスレッドに返す
+    });
 };
