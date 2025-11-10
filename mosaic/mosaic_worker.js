@@ -1,0 +1,133 @@
+// RGB -> L*a*b* 変換のためのヘルパー関数 (Analyzerと同じロジック)
+function rgbToLab(r, g, b) {
+    let var_R = r / 255;
+    let var_G = g / 255;
+    let var_B = b / 255;
+
+    // Gamma correction
+    if (var_R > 0.04045) var_R = Math.pow(((var_R + 0.055) / 1.055), 2.4);
+    else var_R = var_R / 12.92;
+    if (var_G > 0.04045) var_G = Math.pow(((var_G + 0.055) / 1.055), 2.4);
+    else var_G = var_G / 12.92;
+    if (var_B > 0.04045) var_B = Math.pow(((var_B + 0.055) / 1.055), 2.4);
+    else var_B = var_B / 12.92;
+
+    var_R = var_R * 100;
+    var_G = var_G * 100;
+    var_B = var_B * 100;
+
+    // RGB to XYZ conversion
+    let X = var_R * 0.4124 + var_G * 0.3576 + var_B * 0.1805;
+    let Y = var_R * 0.2126 + var_G * 0.7152 + var_B * 0.0722;
+    let Z = var_R * 0.0193 + var_G * 0.1192 + var_B * 0.9505;
+
+    // Reference White Point (D65)
+    let ref_X = 95.047; 
+    let ref_Y = 100.000;
+    let ref_Z = 108.883;
+
+    let var_X = X / ref_X;
+    let var_Y = Y / ref_Y;
+    let var_Z = Z / ref_Z;
+
+    // f(t) function for L*a*b*
+    const f = (t) => t > 0.008856 ? Math.pow(t, (1 / 3)) : (7.787 * t) + (16 / 116);
+
+    var_X = f(var_X);
+    var_Y = f(var_Y);
+    var_Z = f(var_Z);
+
+    let L = (116 * var_Y) - 16;
+    let a = 500 * (var_X - var_Y);
+    let b_star = 200 * (var_Y - var_Z);
+    
+    return { l: L, a: a, b_star: b_star };
+}
+
+
+// Workerで受け取ったデータとタイルデータ配列を処理
+self.onmessage = async (e) => {
+    const { imageData, tileData, tileSize, width, height, blendOpacity } = e.data;
+    const results = [];
+    const tileWidth = tileSize;
+    const tileHeight = tileSize;
+    
+    // タイルの使用回数を記録し、公平性を確保するためのマップ
+    const usageCount = new Map();
+
+    self.postMessage({ type: 'status', message: 'ブロック解析とマッチング中...' });
+
+    // --- メインループ ---
+    for (let y = 0; y < height; y += tileHeight) {
+        for (let x = 0; x < width; x += tileWidth) {
+            
+            // 1. ブロックの平均色を計算 (RGB)
+            let r_sum = 0, g_sum = 0, b_sum = 0;
+            let pixelCount = 0;
+
+            for (let py = y; py < Math.min(y + tileHeight, height); py++) {
+                for (let px = x; px < Math.min(x + tileWidth, width); px++) {
+                    const i = (py * width + px) * 4;
+                    r_sum += imageData.data[i];
+                    g_sum += imageData.data[i + 1];
+                    b_sum += imageData.data[i + 2];
+                    pixelCount++;
+                }
+            }
+
+            if (pixelCount === 0) continue;
+
+            const r_avg = r_sum / pixelCount;
+            const g_avg = g_sum / pixelCount;
+            const b_avg = b_sum / pixelCount;
+            
+            // 2. ブロックの平均RGBをL*a*b*に変換
+            const main_lab = rgbToLab(r_avg, g_avg, b_avg);
+
+            // 3. 最適なタイルをL*a*b*距離で検索
+            let bestMatch = null;
+            let minDistance = Infinity;
+            
+            for (const tile of tileData) {
+                // L*a*b*距離 (知覚的に正確な色差) を使用
+                const dL = main_lab.l - tile.l;
+                const dA = main_lab.a - tile.a;
+                const dB = main_lab.b_star - tile.b_star;
+                
+                // L*a*b* ユークリッド距離
+                let distance = Math.sqrt(dL * dL + dA * dA + dB * dB); 
+                
+                // 公平性のためのペナルティ
+                const count = usageCount.get(tile.url) || 0;
+                const penaltyFactor = 5; 
+                distance += count * penaltyFactor; 
+
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    bestMatch = tile;
+                }
+            }
+
+            // 4. 結果を格納
+            if (bestMatch) {
+                results.push({
+                    url: bestMatch.url,
+                    x: x,
+                    y: y,
+                    width: Math.min(tileWidth, width - x), 
+                    height: Math.min(tileHeight, height - y)
+                });
+                // 使用回数を更新
+                usageCount.set(bestMatch.url, (usageCount.get(bestMatch.url) || 0) + 1);
+            }
+            
+            // 進捗をメインスレッドに通知
+            if ((y * width + x) % (width * tileHeight * 5) === 0) {
+                 self.postMessage({ type: 'progress', progress: (y * width + x) / (width * height) });
+            }
+        }
+    }
+
+    // 完了と結果を送信
+    self.postMessage({ type: 'complete', results: results, width: width, height: height, blendOpacity: blendOpacity });
+};
