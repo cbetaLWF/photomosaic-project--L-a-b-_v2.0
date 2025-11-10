@@ -31,14 +31,14 @@
             border-radius: 8px;
             cursor: pointer;
             transition: background-color 0.2s;
-            margin-right: 10px; /* ボタン間にスペースを追加 */
+            margin-right: 10px;
         }
         #download-json-button {
-            background-color: #f97316; /* オレンジ系の色に変更 */
+            background-color: #f97316;
         }
         button:disabled {
             background-color: #9ca3af;
-            cursor: not-allowed; /* 無効化されているときの禁止カーソルは維持 */
+            cursor: not-allowed;
         }
         #log { 
             margin-top: 20px; 
@@ -73,7 +73,6 @@
         画像をここにドラッグ＆ドロップ（複数選択またはフォルダドロップ可）
     </div>
     
-    <!-- ボタンを並べて配置 -->
     <div>
         <button id="start-analysis" disabled>解析開始</button>
         <button id="download-json-button" disabled>JSONをダウンロード</button>
@@ -82,6 +81,6 @@
     <div id="log">ログ: 解析を待機中...</div>
 
     <script src="analyzer.js"></script>
-    <script src="worker.js"></script> <!-- Workerスクリプトを読み込む -->
+    <script src="worker.js"></script>
 </body>
 </html>
