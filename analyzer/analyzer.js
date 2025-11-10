@@ -47,8 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
         startButton.disabled = true;
         downloadButton.disabled = true;
         
-        // Workerを起動
-        const worker = new Worker('worker_v2.0.js'); // ★ファイル名をv2.0に修正
+        // Workerを起動 (互換性維持のため worker.js を参照)
+        const worker = new Worker('worker.js');
 
         // Workerにファイルリストを送信
         worker.postMessage({ files: uploadedFiles });
