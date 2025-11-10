@@ -3,64 +3,82 @@
 <head>
     <meta charset="UTF-8">
     <title>フォトモザイク生成アプリ</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f0f4f8; color: #1f2937; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); max-width: 900px; width: 100%; margin-bottom: 20px; }
-        #controls { margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        h1 { font-size: 1.8rem; font-weight: 700; color: #1d4ed8; margin-bottom: 10px; }
-        label { font-weight: 600; display: block; margin-bottom: 5px; color: #4b5563; }
-        input[type=\"number\"], input[type=\"range\"] { width: 100%; }
-        button { background-color: #3b82f6; color: white; padding: 10px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background-color 0.3s; }
-        button:hover:not([disabled]) { background-color: #2563eb; }
-        button:disabled { background-color: #93c5fd; cursor: not-allowed; }
+        body { font-family: 'Inter', sans-serif; padding: 20px; background-color: #f4f7f9; color: #333; }
+        h1 { color: #1e3a8a; margin-bottom: 20px; }
+        #controls { margin-bottom: 25px; padding: 20px; border: 1px solid #ccc; background-color: #fff; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }
+        .control-group { margin-bottom: 15px; border-bottom: 1px dashed #eee; padding-bottom: 10px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; color: #3b82f6; }
+        input[type="range"], input[type="number"] { width: calc(100% - 100px); margin-left: 10px; vertical-align: middle; }
+        input[type="number"] { width: 80px; padding: 5px; border: 1px solid #ddd; border-radius: 5px; }
         
-        /* 【★修正箇所★】 height: auto; の指定を削除しました。
-           JavaScriptで設定される canvas 要素の width/height 属性の比率を優先させます。 */
-        #main-canvas { border: 2px solid #e5e7eb; display: block; margin: 20px auto; max-width: 100%; border-radius: 8px; }
+        #generate-button {
+            background-color: #10b981;
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-size: 16px;
+            font-weight: bold;
+            width: 100%;
+            margin-top: 10px;
+        }
+        #generate-button:disabled { background-color: #9ca3af; cursor: not-allowed; }
 
-        /* プログレスバーのスタイル */
-        #progress-bar { width: 100%; background-color: #e0e7ff; border-radius: 4px; overflow: hidden; height: 10px; margin-top: 10px; }
-        #progress-fill { height: 100%; width: 0%; background-color: #3b82f6; transition: width 0.3s; }
-        #status-text { margin-top: 10px; font-size: 0.9rem; color: #4b5563; }
-        #download-button { display: none; background-color: #10b981; margin-top: 15px; }
-        #download-button:hover:not([disabled]) { background-color: #059669; }
+        #progress-bar { width: 100%; height: 20px; background: #e5e7eb; border-radius: 10px; margin-top: 15px; overflow: hidden; }
+        #progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.4s ease-out; }
+        #status-text { margin-top: 10px; font-style: italic; color: #6b7280; }
+
+        #main-canvas { border: 2px solid #ccc; display: block; margin: 25px auto; max-width: 100%; border-radius: 10px; box-shadow: 0 0 15px rgba(0, 0, 0, 0.1); }
+        #download-button {
+            background-color: #f97316;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 15px;
+            display: block; 
+            margin-left: auto;
+            margin-right: auto;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>フォトモザイク生成アプリ</h1>
+    <h1>✨ L*a*b*明度補正フォトモザイク</h1>
+
+    <div id="controls">
+        <input type="file" id="main-image-input" accept="image/*">
         
-        <div id="controls" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div class="md:col-span-1">
-                <label for="main-image-input">メイン画像を選択</label>
-                <input type="file" id="main-image-input" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100">
-            </div>
-
-            <div class="md:col-span-1">
-                <label for="tile-size">マッチングタイルサイズ (px)</label>
-                <input type="number" id="tile-size" value="20" min="10" max="50" class="border p-2 rounded-lg">
-                <p class="text-xs text-gray-500 mt-1">このサイズで色の比較を行います。</p>
-            </div>
-
-            <div class="md:col-span-1">
-                <label for="blend-range">ブレンド度 (透明度)</label>
-                <input type="range" id="blend-range" min="0" max="100" value="30" class="w-full">
-                <p class="text-xs text-gray-500 mt-1"><span id="blend-value">30</span>% - 元画像を重ねる強さ。</p>
-            </div>
+        <div class="control-group">
+            <label for="tile-size">タイルサイズ (px): <span id="tile-size-value">30</span></label>
+            <input type="range" id="tile-size" min="10" max="60" value="30">
         </div>
 
-        <button id="generate-button" disabled class="w-full mt-4">モザイク生成開始</button>
-
-        <div id="progress-bar">
-            <div id="progress-fill"></div>
+        <div class="control-group">
+            <label for="blend-range">ブレンド度 (元の画像の不透明度, %): <span id="blend-range-value">30</span></label>
+            <input type="range" id="blend-range" min="0" max="50" value="30">
         </div>
-        <p id="status-text">ステータス: タイルデータのロードを待機中...</p>
 
-        <canvas id="main-canvas"></canvas>
-        <button id="download-button" class="w-full">モザイク画像をダウンロード (JPEG)</button>
+        <div class="control-group">
+            <label for="brightness-comp">明度補正強度 (%): <span id="brightness-comp-value">100</span></label>
+            <input type="range" id="brightness-comp" min="0" max="200" value="100">
+            <p style="font-size: 12px; color: #ef4444; margin-top: 5px;">※ 100%でターゲットL*に完全一致。0%で補正なし（タイル本来の明るさ）。</p>
+        </div>
+
+        <button id="generate-button" disabled>モザイク生成開始</button>
     </div>
 
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <p id="status-text">ステータス: タイルデータロード待ち...</p>
+
+    <canvas id="main-canvas"></canvas>
+    <button id="download-button" style="display: none;">結果をダウンロード (JPEG)</button>
+
     <script src="main.js"></script>
+    <script src="mosaic_worker.js"></script>
 </body>
 </html>
