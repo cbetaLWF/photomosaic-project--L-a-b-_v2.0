@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>タイル画像解析アプリ</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; padding: 20px; background-color: #f4f7f9; color: #333; }
+        h1 { color: #1e3a8a; }
+        #drop-area { 
+            border: 4px dashed #93c5fd; 
+            background-color: #eff6ff; 
+            padding: 60px 20px; 
+            text-align: center; 
+            cursor: pointer; 
+            margin-bottom: 20px; 
+            border-radius: 12px;
+            transition: background-color 0.2s;
+        }
+        #drop-area:hover { background-color: #dbeafe; }
+        input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            width: 80px;
+        }
+        button {
+            background-color: #10b981;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-right: 10px; /* ボタン間にスペースを追加 */
+        }
+        #download-json-button {
+            background-color: #f97316; /* オレンジ系の色に変更 */
+        }
+        button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed; /* 無効化されているときの禁止カーソルは維持 */
+        }
+        #log { 
+            margin-top: 20px; 
+            white-space: pre-wrap; 
+            background: #fff; 
+            border: 1px solid #e5e7eb;
+            padding: 15px; 
+            height: 200px; 
+            overflow-y: scroll;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .info {
+            background-color: #fef3c7;
+            border: 1px solid #fde68a;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            color: #92400e;
+        }
+    </style>
+</head>
+<body>
+    <h1>🖼️ タイル画像解析 (Analyzer App)</h1>
+    <p>モザイクに使用するタイル画像をここにアップロードし、平均色データを抽出します。</p>
+    
+    <div class="info">
+        <small><strong>ファイル名について:</strong> アップロードしたファイル名をそのまま利用します。タイル画像のリネームは不要です。</small>
+    </div>
+    
+    <div id="drop-area">
+        画像をここにドラッグ＆ドロップ（複数選択またはフォルダドロップ可）
+    </div>
+    
+    <!-- ボタンを並べて配置 -->
+    <div>
+        <button id="start-analysis" disabled>解析開始</button>
+        <button id="download-json-button" disabled>JSONをダウンロード</button>
+    </div>
+    
+    <div id="log">ログ: 解析を待機中...</div>
+
+    <script src="analyzer.js"></script>
+    <script src="worker.js"></script> <!-- Workerスクリプトを読み込む -->
+</body>
+</html>
