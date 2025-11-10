@@ -120,9 +120,26 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const img = new Image();
                 img.crossOrigin = 'anonymous'; 
                 img.onload = () => {
-                    // ★修正ポイント: 高解像度の画像を小さなスペースに縮小描画★
-                    // これにより、ズーム時にディテールが保持される
-                    ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
+                    // 【★修正箇所★】タイル画像が縦横比を維持して、割り当てられたブロックの中央に描画されるように変更
+                    
+                    // 割り当てられたブロックの幅と高さ
+                    const blockWidth = tile.width;
+                    const blockHeight = tile.height;
+
+                    // タイル画像の元の縦横比とブロックサイズを比較し、縮小率を決定
+                    const ratio = Math.min(blockWidth / img.width, blockHeight / img.height);
+                    
+                    // 歪みが生じない新しい描画サイズを計算
+                    const drawWidth = img.width * ratio;
+                    const drawHeight = img.height * ratio;
+
+                    // ブロックの中央に配置するためのオフセットを計算
+                    const offsetX = tile.x + (blockWidth - drawWidth) / 2;
+                    const offsetY = tile.y + (blockHeight - drawHeight) / 2;
+
+                    // 元の縦横比を保って描画
+                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+                    
                     loadedCount++;
                     
                     // ロード進捗を更新
