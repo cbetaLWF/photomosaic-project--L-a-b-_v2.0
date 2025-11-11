@@ -35,14 +35,14 @@ function rgbToLab(r, g, b) {
     return { l: l, a: a, b_star: b_star };
 }
 
-// ★ 変更点: 平均RGBからL*値のみを返す簡易ヘルパー
+// 平均RGBからL*値のみを返す簡易ヘルパー
 function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
 // Workerで受け取った画像データ配列を処理
 self.onmessage = async (e) => {
-    const { files } = e.data;
+    const { files } e.data;
     const results = [];
     const totalFiles = files.length;
 
@@ -62,19 +62,20 @@ self.onmessage = async (e) => {
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
             
-            // --- ★ 変更点: 2x2 L*ベクトル計算のための準備 ---
+            // --- ★ 変更点: 3x3 L*ベクトル計算のための準備 ---
             const width = canvas.width;
             const height = canvas.height;
-            const midX = Math.floor(width / 2);
-            const midY = Math.floor(height / 2);
+            // 3分割するための境界
+            const oneThirdX = Math.floor(width / 3);
+            const twoThirdsX = Math.floor(width * 2 / 3);
+            const oneThirdY = Math.floor(height / 3);
+            const twoThirdsY = Math.floor(height * 2 / 3);
 
-            // [0]=TL, [1]=TR, [2]=BL, [3]=BR
-            const sums = [
-                { r: 0, g: 0, b: 0, count: 0 }, // Top-Left
-                { r: 0, g: 0, b: 0, count: 0 }, // Top-Right
-                { r: 0, g: 0, b: 0, count: 0 }, // Bottom-Left
-                { r: 0, g: 0, b: 0, count: 0 }  // Bottom-Right
-            ];
+            // 3x3 (9領域) の合計を保持する配列
+            // [0][1][2]
+            // [3][4][5]
+            // [6][7][8]
+            const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
             
             // 全体の平均色計算用
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
@@ -82,6 +83,9 @@ self.onmessage = async (e) => {
 
             // ピクセルを走査
             for (let y = 0; y < height; y++) {
+                // yがどの行(row)に属するか (0, 1, 2)
+                const row = (y < oneThirdY) ? 0 : (y < twoThirdsY ? 1 : 2);
+                
                 for (let x = 0; x < width; x++) {
                     const idx = (y * width + x) * 4;
                     const r = data[idx];
@@ -93,17 +97,16 @@ self.onmessage = async (e) => {
                     g_sum_total += g;
                     b_sum_total += b;
 
-                    // 2. ★ 変更点: どの領域(Quadrant)に属するか判定し、加算
-                    let quadIndex;
-                    if (y < midY) {
-                        quadIndex = (x < midX) ? 0 : 1; // Top
-                    } else {
-                        quadIndex = (x < midX) ? 2 : 3; // Bottom
-                    }
-                    sums[quadIndex].r += r;
-                    sums[quadIndex].g += g;
-                    sums[quadIndex].b += b;
-                    sums[quadIndex].count++;
+                    // 2. ★ 変更点: どの領域(grid)に属するか判定
+                    // xがどの列(col)に属するか (0, 1, 2)
+                    const col = (x < oneThirdX) ? 0 : (x < twoThirdsX ? 1 : 2);
+                    // 9領域のインデックス (row * 3 + col)
+                    const gridIndex = row * 3 + col;
+                    
+                    sums[gridIndex].r += r;
+                    sums[gridIndex].g += g;
+                    sums[gridIndex].b += b;
+                    sums[gridIndex].count++;
                 }
             }
 
@@ -113,7 +116,7 @@ self.onmessage = async (e) => {
             const b_avg_total = b_sum_total / pixelCountTotal;
             const lab_total = rgbToLab(r_avg_total, g_avg_total, b_avg_total);
 
-            // --- ★ 変更点: 4領域のL*ベクトルを計算 ---
+            // --- ★ 変更点: 9領域のL*ベクトルを計算 ---
             const l_vector = sums.map(s => {
                 if (s.count === 0) return 0; // 空の領域は黒(L*=0)とする
                 const r_avg = s.r / s.count;
@@ -131,8 +134,8 @@ self.onmessage = async (e) => {
                 l: lab_total.l,
                 a: lab_total.a,
                 b_star: lab_total.b_star,
-                // ★ 変更点: histogram の代わりに l_vector を保存
-                l_vector: l_vector // [l_tl, l_tr, l_bl, l_br]
+                // ★ 変更点: 9次元の l_vector を保存
+                l_vector: l_vector // [l_0, l_1, ..., l_8]
             });
             
             self.postMessage({ type: 'progress', progress: (i + 1) / totalFiles, fileName: file.name });
