@@ -11,9 +11,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
-    // ★ 変更点 (提案3): ヒストグラムスライダー -> テクスチャ比率スライダー
-    const textureRatioInput = document.getElementById('texture-ratio');
-    const textureRatioValue = document.getElementById('texture-ratio-value');
+    // ★ 変更点: テクスチャ「重視度」スライダーに戻す
+    const textureWeightInput = document.getElementById('texture-weight');
+    const textureWeightValue = document.getElementById('texture-weight-value');
 
     // 全ての必須要素が存在するかチェック
     if (!mainCanvas || !statusText || !generateButton) {
@@ -37,10 +37,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ★ 変更点 (提案3): テクスチャ比率スライダーの値表示を更新
-    if (textureRatioInput && textureRatioValue) {
-        textureRatioInput.addEventListener('input', () => {
-            textureRatioValue.textContent = textureRatioInput.value;
+    // ★ 変更点: テクスチャ「重視度」スライダーの値表示を更新
+    if (textureWeightInput && textureWeightValue) {
+        textureWeightInput.addEventListener('input', () => {
+            textureWeightValue.textContent = textureWeightInput.value;
         });
     }
 
@@ -53,9 +53,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileData = await response.json();
         
-        // ★ 変更点: JSONが L*ベクトル(l_vector) を持っているかチェック
-        if (tileData.length > 0 && !tileData[0].l_vector) {
-             throw new Error('tile_data.jsonが古いようです。Analyzer AppでL*ベクトル情報を含む新しいデータを再生成してください。');
+        // ★ 変更点: 3x3 L*ベクトル(l_vector) の存在と長さをチェック
+        if (tileData.length > 0 && (!tileData[0].l_vector || tileData[0].l_vector.length !== 9)) {
+             throw new Error('tile_data.jsonが古いか 3x3ベクトルではありません。Analyzer Appで9次元L*ベクトル情報を含む新しいデータを再生成してください。');
         }
         
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚分) ロード完了。メイン画像を選択してください。`;
@@ -117,8 +117,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             height: mainImage.height,
             blendOpacity: parseInt(blendRangeInput.value),
             brightnessCompensation: parseInt(brightnessCompensationInput.value),
-            // ★ 変更点 (提案3): 0-100の値を 0.0-1.0 の比率に変換して渡す
-            textureRatio: parseFloat(textureRatioInput.value) / 100.0
+            // ★ 変更点: textureRatio -> textureWeight に差し戻し
+            textureWeight: parseFloat(textureWeightInput.value)
         }, [imageData.data.buffer]); // バッファ転送で高速化
 
         // Workerからのメッセージ受信
