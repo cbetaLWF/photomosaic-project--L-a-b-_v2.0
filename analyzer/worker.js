@@ -42,7 +42,8 @@ function getLstar(r, g, b) {
 
 // Workerで受け取った画像データ配列を処理
 self.onmessage = async (e) => {
-    const { files } e.data;
+    // ★ 修正点: const { files } e.data; -> const { files } = e.data;
+    const { files } = e.data;
     const results = [];
     const totalFiles = files.length;
 
@@ -62,7 +63,7 @@ self.onmessage = async (e) => {
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
             
-            // --- ★ 変更点: 3x3 L*ベクトル計算のための準備 ---
+            // --- 3x3 L*ベクトル計算のための準備 ---
             const width = canvas.width;
             const height = canvas.height;
             // 3分割するための境界
@@ -97,7 +98,7 @@ self.onmessage = async (e) => {
                     g_sum_total += g;
                     b_sum_total += b;
 
-                    // 2. ★ 変更点: どの領域(grid)に属するか判定
+                    // 2. どの領域(grid)に属するか判定
                     // xがどの列(col)に属するか (0, 1, 2)
                     const col = (x < oneThirdX) ? 0 : (x < twoThirdsX ? 1 : 2);
                     // 9領域のインデックス (row * 3 + col)
@@ -116,7 +117,7 @@ self.onmessage = async (e) => {
             const b_avg_total = b_sum_total / pixelCountTotal;
             const lab_total = rgbToLab(r_avg_total, g_avg_total, b_avg_total);
 
-            // --- ★ 変更点: 9領域のL*ベクトルを計算 ---
+            // --- 9領域のL*ベクトルを計算 ---
             const l_vector = sums.map(s => {
                 if (s.count === 0) return 0; // 空の領域は黒(L*=0)とする
                 const r_avg = s.r / s.count;
@@ -134,7 +135,6 @@ self.onmessage = async (e) => {
                 l: lab_total.l,
                 a: lab_total.a,
                 b_star: lab_total.b_star,
-                // ★ 変更点: 9次元の l_vector を保存
                 l_vector: l_vector // [l_0, l_1, ..., l_8]
             });
             
