@@ -38,7 +38,8 @@ function rgbToLab(r, g, b) {
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation } = e.data;
+    // ★ 変更点: histogramWeight を受け取る
+    const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation, histogramWeight } = e.data;
     const results = [];
     
     // 16:9アスペクト比固定 (9 / 16 = 0.5625)
@@ -49,15 +50,21 @@ self.onmessage = async (e) => {
     // タイルの使用回数を記録し、公平性を確保するためのマップ
     const usageCount = new Map();
 
-    self.postMessage({ type: 'status', message: 'ブロック解析とL*a*b*マッチング中...' });
+    // ★ 変更点: ヒストグラム定数 (Analyzerと同一)
+    const HISTOGRAM_BINS = 16;
+    const BIN_SIZE = 256 / HISTOGRAM_BINS; // 16
+
+    self.postMessage({ type: 'status', message: 'ブロック解析とL*a*b*・ヒストグラム マッチング中...' });
 
     // --- メインループ ---
     for (let y = 0; y < height; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
-            // 1. ブロックの平均色を計算 (RGB)
+            // 1. ブロックの平均色とヒストグラムを計算
             let r_sum = 0, g_sum = 0, b_sum = 0;
             let pixelCount = 0;
+            // ★ 変更点: ブロックヒストグラムの初期化
+            const blockHistogram = new Array(HISTOGRAM_BINS).fill(0);
 
             // ブロック内のピクセルを走査
             const currentBlockWidth = Math.min(tileWidth, width - x);
@@ -66,9 +73,20 @@ self.onmessage = async (e) => {
             for (let py = y; py < y + currentBlockHeight; py++) {
                 for (let px = x; px < x + currentBlockWidth; px++) {
                     const i = (py * width + px) * 4;
-                    r_sum += imageData.data[i];
-                    g_sum += imageData.data[i + 1];
-                    b_sum += imageData.data[i + 2];
+                    const r = imageData.data[i];
+                    const g = imageData.data[i + 1];
+                    const b = imageData.data[i + 2];
+                    
+                    // 平均色用
+                    r_sum += r;
+                    g_sum += g;
+                    b_sum += b;
+                    
+                    // ★ 変更点: ブロックのヒストグラム計算
+                    const luma = (r * 0.2126 + g * 0.7152 + b * 0.0722);
+                    const binIndex = Math.min(Math.floor(luma / BIN_SIZE), HISTOGRAM_BINS - 1);
+                    blockHistogram[binIndex]++;
+
                     pixelCount++;
                 }
             }
@@ -81,6 +99,9 @@ self.onmessage = async (e) => {
             
             // 2. ブロックのL*a*b*値を計算 (ターゲットL*a*b*)
             const targetLab = rgbToLab(r_avg, g_avg, b_avg);
+
+            // ★ 変更点: ブロックヒストグラムの正規化
+            const normalizedBlockHistogram = blockHistogram.map(count => count / pixelCount);
             
             // 3. 最適なタイルを検索
             let bestMatch = null;
@@ -102,7 +123,7 @@ self.onmessage = async (e) => {
                 const dA = targetLab.a - tile.a;
                 const dB = targetLab.b_star - tile.b_star;
                 
-                // --- 1. 重み付けされたL*a*b*距離 ---
+                // --- 1. 重み付けされたL*a*b*距離 (色) ---
                 let distance = Math.sqrt(
                     (L_WEIGHT * dL * dL) +         
                     (AB_WEIGHT * dA * dA) +        
@@ -112,14 +133,22 @@ self.onmessage = async (e) => {
                 // --- 2. 彩度ペナルティの計算 (C*) ---
                 const tileChroma = Math.sqrt(tile.a * tile.a + tile.b_star * tile.b_star);
                 const chromaDifference = Math.abs(targetChroma - tileChroma);
-                
-                // 彩度差が大きいほど、距離に大きなペナルティを加算
                 const chromaPenalty = chromaDifference * CHROMA_PENALTY_FACTOR;
 
                 distance += chromaPenalty;
 
+                // --- 3. ★ 変更点: ヒストグラム距離 (テクスチャ) の計算 ---
+                // (Sum of Absolute Differences - SAD)
+                let histogramDistance = 0;
+                for (let k = 0; k < HISTOGRAM_BINS; k++) {
+                    histogramDistance += Math.abs(normalizedBlockHistogram[k] - tile.histogram[k]);
+                }
+                // ヒストグラム距離に重みをかけてペナルティとして加算
+                // (histogramDistanceは 0～2 の範囲)
+                distance += histogramDistance * histogramWeight;
 
-                // --- 3. 公平性のためのペナルティ ---
+
+                // --- 4. 公平性のためのペナルティ ---
                 const count = usageCount.get(tile.url) || 0;
                 const fairnessPenalty = count * 5; // 調整可能な係数
                 distance += fairnessPenalty; 
@@ -130,7 +159,7 @@ self.onmessage = async (e) => {
                 }
             }
 
-            // 4. 結果を格納
+            // 5. 結果を格納
             if (bestMatch) {
                 results.push({
                     url: bestMatch.url,
