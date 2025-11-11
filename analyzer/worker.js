@@ -42,6 +42,10 @@ self.onmessage = async (e) => {
     const results = [];
     const totalFiles = files.length;
 
+    // ★ 変更点: ヒストグラムのビン（階級）数を定義
+    const HISTOGRAM_BINS = 16;
+    const BIN_SIZE = 256 / HISTOGRAM_BINS; // 1ビンあたりの輝度幅 (16)
+
     for (let i = 0; i < totalFiles; i++) {
         const file = files[i];
 
@@ -62,19 +66,44 @@ self.onmessage = async (e) => {
             let r_sum = 0, g_sum = 0, b_sum = 0;
             const pixelCount = data.length / 4;
 
-            // 平均色を計算
+            // ★ 変更点: ヒストグラム配列を初期化 (16個の0で埋める)
+            const histogram = new Array(HISTOGRAM_BINS).fill(0);
+
+            // 平均色計算とヒストグラム計算を同時に行う
             for (let j = 0; j < data.length; j += 4) {
-                r_sum += data[j];
-                g_sum += data[j + 1];
-                b_sum += data[j + 2];
+                const r = data[j];
+                const g = data[j + 1];
+                const b = data[j + 2];
+
+                // 1. 平均色のための合計
+                r_sum += r;
+                g_sum += g;
+                b_sum += b;
+                
+                // 2. ★ 変更点: ヒストグラムのための輝度計算
+                // 知覚輝度 (Luma) の計算 (0-255の範囲)
+                // (RGBからL*a*b*のL*を直接計算するのは重いため、高速な知覚輝度を使用)
+                const luma = (r * 0.2126 + g * 0.7152 + b * 0.0722);
+                
+                // どのビンに入るか計算 (0 ～ 15 のインデックス)
+                // Math.floor(luma / BIN_SIZE) は 0～16 の値を取りうる (luma=255のとき16)
+                // そのため、BINS-1 (つまり15) にクランプ(丸め込み)する
+                const binIndex = Math.min(Math.floor(luma / BIN_SIZE), HISTOGRAM_BINS - 1);
+                
+                histogram[binIndex]++;
             }
 
+            // 平均色
             const r = Math.round(r_sum / pixelCount);
             const g = Math.round(g_sum / pixelCount);
             const b = Math.round(b_sum / pixelCount);
 
             // RGB平均からL*a*b*へ変換
             const lab = rgbToLab(r, g, b);
+
+            // ★ 変更点: ヒストグラムを正規化 (合計が1になるように)
+            // (各ビンのカウントを総ピクセル数で割る)
+            const normalizedHistogram = histogram.map(count => count / pixelCount);
 
             // 結果を格納
             results.push({
@@ -85,7 +114,9 @@ self.onmessage = async (e) => {
                 b: b,
                 l: lab.l,
                 a: lab.a,
-                b_star: lab.b_star
+                b_star: lab.b_star,
+                // ★ 変更点: 正規化されたヒストグラムを追加
+                histogram: normalizedHistogram
             });
             
             // 進捗をメインスレッドに通知
