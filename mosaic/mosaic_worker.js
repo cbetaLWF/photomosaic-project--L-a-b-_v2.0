@@ -111,8 +111,14 @@ self.onmessage = async (e) => {
             const L_WEIGHT = 0.05; 
             // a*b*成分の重み (色相優先のため、L*の2倍の重み)
             const AB_WEIGHT = 2.0; 
-            // 彩度ペナルティの係数
-            const CHROMA_PENALTY_FACTOR = 0.5; // 彩度差10ごとにペナルティを加える (調整可能)
+            
+            // --- ★ 変更点 (提案1): 動的彩度ペナルティの定数 ---
+            // この彩度以下のブロックは「低彩度」とみなし、ペナルティを強化する
+            const LOW_CHROMA_THRESHOLD = 15.0; 
+            // 低彩度領域で適用する強力なペナルティ係数
+            const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
+             // 通常（高彩度）領域で適用するデフォルトのペナルティ係数
+            const DEFAULT_CHROMA_PENALTY_FACTOR = 0.5; 
 
             // ブロックのターゲット彩度 C* を計算
             const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
@@ -130,14 +136,21 @@ self.onmessage = async (e) => {
                     (AB_WEIGHT * dB * dB)          
                 );
                 
-                // --- 2. 彩度ペナルティの計算 (C*) ---
+                // --- 2. ★ 変更点 (提案1): 彩度ペナルティの動的計算 (C*) ---
                 const tileChroma = Math.sqrt(tile.a * tile.a + tile.b_star * tile.b_star);
                 const chromaDifference = Math.abs(targetChroma - tileChroma);
-                const chromaPenalty = chromaDifference * CHROMA_PENALTY_FACTOR;
+                
+                // ターゲットブロックの彩度に応じてペナルティ係数を決定
+                const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD)
+                    ? HIGH_CHROMA_PENALTY_FACTOR
+                    : DEFAULT_CHROMA_PENALTY_FACTOR;
+
+                // 彩度差に基づき、決定した係数でペナルティを加算
+                const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
 
                 distance += chromaPenalty;
 
-                // --- 3. ★ 変更点: ヒストグラム距離 (テクスチャ) の計算 ---
+                // --- 3. ヒストグラム距離 (テクスチャ) の計算 ---
                 // (Sum of Absolute Differences - SAD)
                 let histogramDistance = 0;
                 for (let k = 0; k < HISTOGRAM_BINS; k++) {
