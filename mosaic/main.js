@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
-    // UI要素の取得（nullチェック回避のため、取得後にすぐチェックを追加）
+    // UI要素の取得
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
@@ -11,6 +11,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
+    // ★ 変更点: ヒストグラムスライダーの要素を取得
+    const histogramWeightInput = document.getElementById('histogram-weight');
+    const histogramWeightValue = document.getElementById('histogram-weight-value');
+
     // 全ての必須要素が存在するかチェック
     if (!mainCanvas || !statusText || !generateButton) {
         console.error("Initialization Error: One or more required HTML elements are missing.");
@@ -33,6 +37,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    // ★ 変更点: ヒストグラムスライダーの値表示を更新
+    if (histogramWeightInput && histogramWeightValue) {
+        histogramWeightInput.addEventListener('input', () => {
+            histogramWeightValue.textContent = histogramWeightInput.value;
+        });
+    }
+
     // --- 1. タイルデータの初期ロード ---
     try {
         statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
@@ -41,6 +52,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。Analyzer Appでデータを作成し、/mosaic/フォルダに配置してください。`);
         }
         tileData = await response.json();
+        
+        // ★ 変更点: JSONにヒストグラムデータがあるか簡易チェック
+        if (tileData.length > 0 && !tileData[0].histogram) {
+             throw new Error('tile_data.jsonが古いようです。Analyzer Appでヒストグラム情報を含む新しいデータを再生成してください。');
+        }
+        
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚分) ロード完了。メイン画像を選択してください。`;
         if (mainImageInput) mainImageInput.disabled = false;
     } catch (error) {
@@ -104,7 +121,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             width: mainImage.width,
             height: mainImage.height,
             blendOpacity: parseInt(blendRangeInput.value),
-            brightnessCompensation: parseInt(brightnessCompensationInput.value)
+            brightnessCompensation: parseInt(brightnessCompensationInput.value),
+            // ★ 変更点: ヒストグラムの重みを渡す
+            histogramWeight: parseFloat(histogramWeightInput.value) 
         }, [imageData.data.buffer]); // バッファ転送で高速化
 
         // Workerからのメッセージ受信
@@ -130,6 +149,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 ---
+    // (renderMosaic 関数は変更ありません)
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
