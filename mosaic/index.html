@@ -41,7 +41,7 @@
                 <input type="file" id="main-image-input" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
             </div>
 
-            <div class="control-group grid md:grid-cols-3 gap-4">
+            <div class="control-group grid md:grid-cols-4 gap-4">
                 <div>
                     <label for="tile-size">タイル幅 (px):</label>
                     <input type="number" id="tile-size" value="20" min="10" max="100" class="w-full p-2 border border-gray-300 rounded-md">
@@ -52,9 +52,14 @@
                     <input type="range" id="blend-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('blend-value').textContent = this.value">
                 </div>
                 <div>
-                    <label for="brightness-compensation">L*明度補正の適用度 (%): <span id="brightness-compensation-value">100</span>%</label>
+                    <label for="brightness-compensation">L*明度補正 (%): <span id="brightness-compensation-value">100</span>%</label>
                     <input type="range" id="brightness-compensation" min="0" max="100" value="100" class="w-full" oninput="document.getElementById('brightness-compensation-value').textContent = this.value">
-                    <p class="text-xs text-gray-500 mt-1">100%でターゲットL*に完全に一致。</p>
+                    <p class="text-xs text-gray-500 mt-1">100%でターゲットL*に一致。</p>
+                </div>
+                <div>
+                    <label for="histogram-weight">テクスチャ重視度: <span id="histogram-weight-value">50</span></label>
+                    <input type="range" id="histogram-weight" min="0" max="200" value="50" class="w-full" oninput="document.getElementById('histogram-weight-value').textContent = this.value">
+                    <p class="text-xs text-gray-500 mt-1">0=色のみ、大きくするとテクスチャ優先。</p>
                 </div>
             </div>
             
@@ -70,7 +75,6 @@
         <button id="download-button" style="display: none;" class="w-full p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-md transition-colors">結果をダウンロード (PNG/ロスレス)</button>
     </div>
 
-    <!-- JavaScript Files (互換性維持のため、サフィックスなしのファイル名を参照) -->
     <script src="main.js"></script>
     <script src="mosaic_worker.js"></script> 
 </body>
