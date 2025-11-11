@@ -30,45 +30,55 @@ function rgbToLab(r, g, b) {
     let a = 500 * (fx - fy);
     let b_star = 200 * (fy - fz);
 
-    // L*は0-100の範囲に、a*b*は約-100から+100の範囲になるようにクランプ
     l = Math.max(0, Math.min(100, l));
 
     return { l: l, a: a, b_star: b_star };
 }
 
+// ★ 変更点: 平均RGBからL*値のみを返す簡易ヘルパー
+function getLstar(r, g, b) {
+    return rgbToLab(r, g, b).l;
+}
+
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    // ★ 変更点: histogramWeight を受け取る
-    const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation, histogramWeight } = e.data;
+    // ★ 変更点 (提案3): histogramWeight -> textureRatio (0.0-1.0の比率)
+    const { imageData, tileData, tileSize, width, height, blendOpacity, brightnessCompensation, textureRatio } = e.data;
     const results = [];
     
-    // 16:9アスペクト比固定 (9 / 16 = 0.5625)
     const ASPECT_RATIO = 9 / 16; 
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO);
     
-    // タイルの使用回数を記録し、公平性を確保するためのマップ
     const usageCount = new Map();
+    
+    // ★ 変更点: ヒストグラム定数を削除
 
-    // ★ 変更点: ヒストグラム定数 (Analyzerと同一)
-    const HISTOGRAM_BINS = 16;
-    const BIN_SIZE = 256 / HISTOGRAM_BINS; // 16
-
-    self.postMessage({ type: 'status', message: 'ブロック解析とL*a*b*・ヒストグラム マッチング中...' });
+    self.postMessage({ type: 'status', message: 'ブロック解析とL*a*b*・空間L*ベクトル マッチング中...' });
 
     // --- メインループ ---
     for (let y = 0; y < height; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
-            // 1. ブロックの平均色とヒストグラムを計算
-            let r_sum = 0, g_sum = 0, b_sum = 0;
-            let pixelCount = 0;
-            // ★ 変更点: ブロックヒストグラムの初期化
-            const blockHistogram = new Array(HISTOGRAM_BINS).fill(0);
-
             // ブロック内のピクセルを走査
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
+            
+            // --- ★ 変更点 (提案2): 2x2 L*ベクトル計算のための準備 ---
+            const midX = x + Math.floor(currentBlockWidth / 2);
+            const midY = y + Math.floor(currentBlockHeight / 2);
+
+            // [0]=TL, [1]=TR, [2]=BL, [3]=BR
+            const sums = [
+                { r: 0, g: 0, b: 0, count: 0 }, // Top-Left
+                { r: 0, g: 0, b: 0, count: 0 }, // Top-Right
+                { r: 0, g: 0, b: 0, count: 0 }, // Bottom-Left
+                { r: 0, g: 0, b: 0, count: 0 }  // Bottom-Right
+            ];
+            
+            // 全体の平均色計算用
+            let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
+            let pixelCountTotal = 0;
 
             for (let py = y; py < y + currentBlockHeight; py++) {
                 for (let px = x; px < x + currentBlockWidth; px++) {
@@ -77,101 +87,103 @@ self.onmessage = async (e) => {
                     const g = imageData.data[i + 1];
                     const b = imageData.data[i + 2];
                     
-                    // 平均色用
-                    r_sum += r;
-                    g_sum += g;
-                    b_sum += b;
-                    
-                    // ★ 変更点: ブロックのヒストグラム計算
-                    const luma = (r * 0.2126 + g * 0.7152 + b * 0.0722);
-                    const binIndex = Math.min(Math.floor(luma / BIN_SIZE), HISTOGRAM_BINS - 1);
-                    blockHistogram[binIndex]++;
+                    // 1. 全体の平均色
+                    r_sum_total += r;
+                    g_sum_total += g;
+                    b_sum_total += b;
+                    pixelCountTotal++;
 
-                    pixelCount++;
+                    // 2. ★ 変更点 (提案2): どの領域(Quadrant)に属するか判定
+                    let quadIndex;
+                    if (py < midY) {
+                        quadIndex = (px < midX) ? 0 : 1; // Top
+                    } else {
+                        quadIndex = (px < midX) ? 2 : 3; // Bottom
+                    }
+                    sums[quadIndex].r += r;
+                    sums[quadIndex].g += g;
+                    sums[quadIndex].b += b;
+                    sums[quadIndex].count++;
                 }
             }
 
-            if (pixelCount === 0) continue;
+            if (pixelCountTotal === 0) continue;
 
-            const r_avg = r_sum / pixelCount;
-            const g_avg = g_sum / pixelCount;
-            const b_avg = b_sum / pixelCount;
-            
-            // 2. ブロックのL*a*b*値を計算 (ターゲットL*a*b*)
-            const targetLab = rgbToLab(r_avg, g_avg, b_avg);
+            // --- ターゲットブロックの全体平均L*a*b*を計算 ---
+            const r_avg_total = r_sum_total / pixelCountTotal;
+            const g_avg_total = g_sum_total / pixelCountTotal;
+            const b_avg_total = b_sum_total / pixelCountTotal;
+            const targetLab = rgbToLab(r_avg_total, g_avg_total, b_avg_total);
 
-            // ★ 変更点: ブロックヒストグラムの正規化
-            const normalizedBlockHistogram = blockHistogram.map(count => count / pixelCount);
+            // --- ★ 変更点 (提案2): ターゲットブロックの 2x2 L*ベクトルを計算 ---
+            const target_l_vector = sums.map(s => {
+                if (s.count === 0) return 0;
+                return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
+            });
             
             // 3. 最適なタイルを検索
             let bestMatch = null;
             let minDistance = Infinity;
             
-            // L*成分の重み (明度補正を前提とし、L*の影響を大幅に減らす)
+            // L*a*b* 色距離の重み (変更なし)
             const L_WEIGHT = 0.05; 
-            // a*b*成分の重み (色相優先のため、L*の2倍の重み)
             const AB_WEIGHT = 2.0; 
             
-            // --- ★ 変更点 (提案1の修正): 動的彩度ペナルティの定数 ---
-            
-            // ★ 変更点: 閾値を 15.0 から 25.0 に引き上げ
-            // これで肌色(C*≈20)や薄い服も「低彩度領域」として正しく認識される
+            // 動的彩度ペナルティの定数 (変更なし)
             const LOW_CHROMA_THRESHOLD = 25.0; 
-            
-            // 低彩度領域で適用する強力なペナルティ係数
             const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
-             // 通常（高彩度）領域で適用するデフォルトのペナルティ係数
             const DEFAULT_CHROMA_PENALTY_FACTOR = 0.5; 
+            
+            // ★ 変更点 (提案3): テクスチャ距離のスケールを色距離に合わせるための係数
+            // 色距離の最大が約400、テクスチャ距離(L* 4次元)の最大が約200 (sqrt(4*100^2))
+            // なので、2.0を掛けてスケールを合わせる
+            const TEXTURE_SCALE_FACTOR = 2.0;
 
-            // ブロックのターゲット彩度 C* を計算
+            // ターゲット彩度 (変更なし)
             const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
             
             for (const tile of tileData) {
-                // L*a*b*距離の計算
+                // --- 1. 色距離 (Color Distance) の計算 ---
                 const dL = targetLab.l - tile.l;
                 const dA = targetLab.a - tile.a;
                 const dB = targetLab.b_star - tile.b_star;
                 
-                // --- 1. 重み付けされたL*a*b*距離 (色) ---
-                let distance = Math.sqrt(
-                    (L_WEIGHT * dL * dL) +         
-                    (AB_WEIGHT * dA * dA) +        
-                    (AB_WEIGHT * dB * dB)          
+                let colorDistance = Math.sqrt(
+                    (L_WEIGHT * dL * dL) + (AB_WEIGHT * dA * dA) + (AB_WEIGHT * dB * dB)          
                 );
                 
-                // --- 2. ★ 変更点 (提案1の修正): 彩度ペナルティの動的計算 (C*) ---
+                // 動的彩度ペナルティ
                 const tileChroma = Math.sqrt(tile.a * tile.a + tile.b_star * tile.b_star);
                 const chromaDifference = Math.abs(targetChroma - tileChroma);
-                
-                // ターゲットブロックの彩度に応じてペナルティ係数を決定
-                // (targetChroma < 25.0) が肌色などで true になる
                 const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD)
                     ? HIGH_CHROMA_PENALTY_FACTOR
                     : DEFAULT_CHROMA_PENALTY_FACTOR;
+                colorDistance += chromaDifference * dynamicChromaPenaltyFactor;
 
-                // 彩度差に基づき、決定した係数でペナルティを加算
-                const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
+                // --- 2. ★ 変更点 (提案2): テクスチャ距離 (Texture Distance) の計算 ---
+                // 4次元 L*ベクトルのユークリッド距離
+                const d_l_tl = target_l_vector[0] - tile.l_vector[0];
+                const d_l_tr = target_l_vector[1] - tile.l_vector[1];
+                const d_l_bl = target_l_vector[2] - tile.l_vector[2];
+                const d_l_br = target_l_vector[3] - tile.l_vector[3];
+                
+                const textureDistance = Math.sqrt(
+                    (d_l_tl * d_l_tl) + (d_l_tr * d_l_tr) + (d_l_bl * d_l_bl) + (d_l_br * d_l_br)
+                );
 
-                distance += chromaPenalty;
+                // --- 3. ★ 変更点 (提案3): 最終距離の重み付き計算 ---
+                // (1.0 - textureRatio) * 色距離 + textureRatio * テクスチャ距離
+                let totalDistance = 
+                    (1.0 - textureRatio) * colorDistance + 
+                    textureRatio * (textureDistance * TEXTURE_SCALE_FACTOR);
 
-                // --- 3. ヒストグラム距離 (テクスチャ) の計算 ---
-                // (Sum of Absolute Differences - SAD)
-                let histogramDistance = 0;
-                for (let k = 0; k < HISTOGRAM_BINS; k++) {
-                    histogramDistance += Math.abs(normalizedBlockHistogram[k] - tile.histogram[k]);
-                }
-                // ヒストグラム距離に重みをかけてペナルティとして加算
-                // (histogramDistanceは 0～2 の範囲)
-                distance += histogramDistance * histogramWeight;
+                // --- 4. 公平性ペナルティ (変更なし) ---
+                const count = usageCount.get(tile.l_vector) || 0; // キーをl_vectorに変更
+                const fairnessPenalty = count * 0.5; 
+                totalDistance += fairnessPenalty; 
 
-
-                // --- 4. 公平性のためのペナルティ ---
-                const count = usageCount.get(tile.url) || 0;
-                const fairnessPenalty = count * 5; // 調整可能な係数
-                distance += fairnessPenalty; 
-
-                if (distance < minDistance) {
-                    minDistance = distance;
+                if (totalDistance < minDistance) {
+                    minDistance = totalDistance;
                     bestMatch = tile;
                 }
             }
@@ -188,7 +200,7 @@ self.onmessage = async (e) => {
                     tileL: bestMatch.l // タイル画像のL*値
                 });
                 // 使用回数を更新
-                usageCount.set(bestMatch.url, (usageCount.get(bestMatch.url) || 0) + 1);
+                usageCount.set(bestMatch.l_vector, (usageCount.get(bestMatch.l_vector) || 0) + 1);
             }
             
             // 進捗をメインスレッドに通知 (負荷軽減のため一定間隔で)
