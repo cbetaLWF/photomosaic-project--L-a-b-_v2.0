@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
-    // ★ 変更点: テクスチャ「重視度」スライダーに戻す
+    // 「テクスチャ重視度」スライダー
     const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
 
@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ★ 変更点: テクスチャ「重視度」スライダーの値表示を更新
+    // 「テクスチャ重視度」スライダーの値表示を更新
     if (textureWeightInput && textureWeightValue) {
         textureWeightInput.addEventListener('input', () => {
             textureWeightValue.textContent = textureWeightInput.value;
@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileData = await response.json();
         
-        // ★ 変更点: 3x3 L*ベクトル(l_vector) の存在と長さをチェック
+        // 9次元L*ベクトルのチェック (変更なし)
         if (tileData.length > 0 && (!tileData[0].l_vector || tileData[0].l_vector.length !== 9)) {
              throw new Error('tile_data.jsonが古いか 3x3ベクトルではありません。Analyzer Appで9次元L*ベクトル情報を含む新しいデータを再生成してください。');
         }
@@ -117,11 +117,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             height: mainImage.height,
             blendOpacity: parseInt(blendRangeInput.value),
             brightnessCompensation: parseInt(brightnessCompensationInput.value),
-            // ★ 変更点: textureRatio -> textureWeight に差し戻し
-            textureWeight: parseFloat(textureWeightInput.value)
+            // ★ 変更点: 0-200の値を 0.0-2.0 にスケーリングして渡す
+            textureWeight: parseFloat(textureWeightInput.value) / 100.0
         }, [imageData.data.buffer]); // バッファ転送で高速化
 
-        // Workerからのメッセージ受信
+        // Workerからのメッセージ受信 (変更なし)
         worker.onmessage = (e) => {
             if (e.data.type === 'status') {
                 statusText.textContent = `ステータス: ${e.data.message}`;
