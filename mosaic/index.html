@@ -57,9 +57,9 @@
                     <p class="text-xs text-gray-500 mt-1">100%でターゲットL*に一致。</p>
                 </div>
                 <div>
-                    <label for="texture-ratio">テクスチャ比率 (%): <span id="texture-ratio-value">50</span>%</label>
-                    <input type="range" id="texture-ratio" min="0" max="100" value="50" class="w-full" oninput="document.getElementById('texture-ratio-value').textContent = this.value">
-                    <p class="text-xs text-gray-500 mt-1">0%=色のみ, 100%=テクスチャのみ</p>
+                    <label for="texture-weight">テクスチャ重視度: <span id="texture-weight-value">50</span></label>
+                    <input type="range" id="texture-weight" min="0" max="200" value="50" class="w-full" oninput="document.getElementById('texture-weight-value').textContent = this.value">
+                    <p class="text-xs text-gray-500 mt-1">0=色のみ、大きくするとテクスチャ優先。</p>
                 </div>
             </div>
             
