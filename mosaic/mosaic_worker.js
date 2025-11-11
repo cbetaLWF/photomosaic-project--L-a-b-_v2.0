@@ -112,9 +112,12 @@ self.onmessage = async (e) => {
             // a*b*成分の重み (色相優先のため、L*の2倍の重み)
             const AB_WEIGHT = 2.0; 
             
-            // --- ★ 変更点 (提案1): 動的彩度ペナルティの定数 ---
-            // この彩度以下のブロックは「低彩度」とみなし、ペナルティを強化する
-            const LOW_CHROMA_THRESHOLD = 15.0; 
+            // --- ★ 変更点 (提案1の修正): 動的彩度ペナルティの定数 ---
+            
+            // ★ 変更点: 閾値を 15.0 から 25.0 に引き上げ
+            // これで肌色(C*≈20)や薄い服も「低彩度領域」として正しく認識される
+            const LOW_CHROMA_THRESHOLD = 25.0; 
+            
             // 低彩度領域で適用する強力なペナルティ係数
             const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
              // 通常（高彩度）領域で適用するデフォルトのペナルティ係数
@@ -136,11 +139,12 @@ self.onmessage = async (e) => {
                     (AB_WEIGHT * dB * dB)          
                 );
                 
-                // --- 2. ★ 変更点 (提案1): 彩度ペナルティの動的計算 (C*) ---
+                // --- 2. ★ 変更点 (提案1の修正): 彩度ペナルティの動的計算 (C*) ---
                 const tileChroma = Math.sqrt(tile.a * tile.a + tile.b_star * tile.b_star);
                 const chromaDifference = Math.abs(targetChroma - tileChroma);
                 
                 // ターゲットブロックの彩度に応じてペナルティ係数を決定
+                // (targetChroma < 25.0) が肌色などで true になる
                 const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD)
                     ? HIGH_CHROMA_PENALTY_FACTOR
                     : DEFAULT_CHROMA_PENALTY_FACTOR;
