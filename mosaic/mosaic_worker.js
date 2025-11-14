@@ -38,11 +38,11 @@ self.onmessage = async (e) => {
     
     const results = [];
     
-    const ASPECT_RATIO = 9 / 16; 
+    // ★ 変更点: 16:9 -> 1:1 (正方形)
+    const ASPECT_RATIO = 1.0; 
     const tileWidth = tileSize;
-    const tileHeight = Math.round(tileSize * ASPECT_RATIO);
+    const tileHeight = Math.round(tileSize * ASPECT_RATIO); // = tileWidth
     
-    // ★ 変更点: usageCountは「パターンごと」にカウントする
     const usageCount = new Map(); 
 
     self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
@@ -51,22 +51,26 @@ self.onmessage = async (e) => {
     const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
     let processedRows = 0;
 
-
     // --- メインループ (担当範囲 y = startY から endY まで) ---
     for (let y = startY; y < endY; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
-            // ( ... 3x3 L*ベクトル計算とターゲットLab計算 ... )
-            // ( ... このブロックのロジックは変更なし ... )
+            // ターゲットブロックのサイズ (ほぼ正方形になる)
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
+            
+            // 3x3 L*ベクトル計算のための準備
             const oneThirdX = x + Math.floor(currentBlockWidth / 3);
             const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
             const oneThirdY = y + Math.floor(currentBlockHeight / 3);
             const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
+
             const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+            
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             let pixelCountTotal = 0;
+
+            // ★ 変更点: ブロック走査 (currentBlockHeight は正方形)
             for (let py = y; py < y + currentBlockHeight; py++) {
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                 for (let px = x; px < x + currentBlockWidth; px++) {
@@ -79,6 +83,8 @@ self.onmessage = async (e) => {
                 }
             }
             if (pixelCountTotal === 0) continue;
+
+            // ターゲットブロックの平均L*a*b*と3x3 L*ベクトル (正方形ベース)
             const r_avg_total = r_sum_total / pixelCountTotal;
             const g_avg_total = g_sum_total / pixelCountTotal;
             const b_avg_total = b_sum_total / pixelCountTotal;
@@ -87,7 +93,6 @@ self.onmessage = async (e) => {
                 if (s.count === 0) return 0;
                 return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
             });
-
             
             // ( ... 最適なタイルを検索するループ ... )
             let bestMatch = null;
@@ -99,54 +104,40 @@ self.onmessage = async (e) => {
             const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
             const DEFAULT_CHROMA_PENALTY_FACTOR = 0.5; 
             const TEXTURE_SCALE_FACTOR = 0.5;
-            
             const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
             
-            // ★ 変更点: 6倍拡張に対応したネストループ
+            // 6倍拡張に対応したネストループ
             for (const tile of tileData) {
-                // 1枚のタイル画像 (tile.url) が持つ6つのパターンをすべて比較
                 for (const pattern of tile.patterns) {
-                
-                    // --- 1. 色距離 (Color Distance) の計算 ---
-                    // ★ 変更点: tile.l -> pattern.l
+                    // ( ... 色距離(colorDistance)の計算 ... )
                     const dL = targetLab.l - pattern.l;
                     const dA = targetLab.a - pattern.a;
                     const dB = targetLab.b_star - pattern.b_star;
-                    
                     let baseColorDistance = Math.sqrt((L_WEIGHT * dL * dL) + (AB_WEIGHT * dA * dA) + (AB_WEIGHT * dB * dB));
-                    
-                    // ★ 変更点: tile.a -> pattern.a
                     const tileChroma = Math.sqrt(pattern.a * pattern.a + pattern.b_star * pattern.b_star);
                     const chromaDifference = Math.abs(targetChroma - tileChroma);
                     const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD) ? HIGH_CHROMA_PENALTY_FACTOR : DEFAULT_CHROMA_PENALTY_FACTOR;
                     const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
-                    
                     const colorDistance = baseColorDistance + chromaPenalty;
 
-                    // --- 2. 3x3 L*ベクトル距離 (Texture Distance) の計算 ---
+                    // ( ... 3x3 L*ベクトル距離(textureDistance)の計算 ... )
                     let textureDistanceSquared = 0;
                     for (let k = 0; k < 9; k++) {
-                        // ★ 変更点: tile.l_vector -> pattern.l_vector
                         const diff = target_l_vector[k] - pattern.l_vector[k];
                         textureDistanceSquared += diff * diff;
                     }
                     const textureDistance = Math.sqrt(textureDistanceSquared);
 
-                    // --- 3. 最終距離の「加算」ロジック ---
-                    let totalDistance = 
-                          colorDistance 
-                        + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
-
-                    // --- 4. 公平性ペナルティ ---
-                    // ★ 変更点: パターン(l_vector) ごとに使用回数をカウント
+                    // ( ... 最終距離(totalDistance)の計算 ... )
+                    let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
                     const count = usageCount.get(pattern.l_vector) || 0; 
                     const fairnessPenalty = count * 0.5; 
                     totalDistance += fairnessPenalty; 
 
                     if (totalDistance < minDistance) {
                         minDistance = totalDistance;
-                        bestMatch = pattern; // 最適な「パターン」を保持
-                        bestMatchUrl = tile.url; // そのパターンが属する「画像URL」を保持
+                        bestMatch = pattern; // 最適な「パターン」
+                        bestMatchUrl = tile.url; // その「画像URL」
                     }
                 } // 拡張パターン (6種) のループ終わり
             } // タイル (tileData) のループ終わり
@@ -155,14 +146,14 @@ self.onmessage = async (e) => {
             if (bestMatch) {
                 results.push({
                     url: bestMatchUrl, // 実際に描画する画像URL
+                    patternType: bestMatch.type, // ★ 変更点: どの拡張パターンが選ばれたか
                     x: x,
                     y: y,
-                    width: currentBlockWidth,
-                    height: currentBlockHeight,
+                    width: currentBlockWidth, // 正方形の幅
+                    height: currentBlockHeight, // 正方形の高さ
                     targetL: targetLab.l, // ブロックのL*値
                     tileL: bestMatch.l // 選ばれた「パターン」のL*値
                 });
-                // 使用回数を更新
                 usageCount.set(bestMatch.l_vector, (usageCount.get(bestMatch.l_vector) || 0) + 1);
             }
         } // xループの終わり
@@ -176,7 +167,7 @@ self.onmessage = async (e) => {
     // 完了と「部分的な」結果を送信
     self.postMessage({ 
         type: 'complete', 
-        results: results, // このWorkerの担当分だけの結果
+        results: results, 
         width: width, 
         height: height, 
         blendOpacity: blendOpacity, 
