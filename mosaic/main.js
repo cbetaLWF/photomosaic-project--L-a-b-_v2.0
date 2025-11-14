@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
-    // UI要素の取得
+    // ( ... UI要素の取得 ... )
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
@@ -10,12 +10,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const blendRangeInput = document.getElementById('blend-range');
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
-    
-    // 「テクスチャ重視度」スライダー
     const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
     
-    // 全ての必須要素が存在するかチェック
+    // ( ... 必須要素チェック ... )
     if (!mainCanvas || !statusText || !generateButton) {
         console.error("Initialization Error: One or more required HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status) are missing from the HTML.</p>";
@@ -27,11 +25,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     let mainImage = null;
     let workers = [];
 
-    // --- UIの初期設定 ---
+    // ( ... UIの初期設定 (スライダーリスナー含む) ... )
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
-
-    // ( ... スライダーのリスナー ... )
     if (brightnessCompensationInput && brightnessCompensationValue) {
         brightnessCompensationInput.addEventListener('input', () => {
             brightnessCompensationValue.textContent = brightnessCompensationInput.value;
@@ -72,7 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 2. メイン画像アップロード ---
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
-            // ( ... 変更なし: 画像をロードしてプレビューするだけ ... )
+            // ( ... 変更なし ... )
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
@@ -175,7 +171,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 ---
-    // (★ 変更点: 正方形クロップ＆反転に対応)
+    // (★ 変更点: 縦長クロップ描画対応)
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
@@ -206,29 +202,40 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
 
-                    // ★★★ ここからが全面改修 ★★★
+                    // ★★★ ここからが変更点 ★★★
 
-                    // 1. ソース画像のサイズ（元の16:9画像のサイズ）
+                    // 1. ソース画像のサイズ
                     const sWidth = img.naturalWidth;
                     const sHeight = img.naturalHeight;
                     
                     // 2. Analyzerがクロップした正方形のサイズ
                     const sSize = Math.min(sWidth, sHeight);
+                    const isHorizontal = sWidth > sHeight; // ソース画像が横長か？
 
-                    // 3. 'tile.patternType' (e.g., "cropC_flip1") をパース
-                    const typeParts = tile.patternType.split('_'); // ["cropC", "flip1"]
-                    const cropType = typeParts[0]; // "cropL", "cropC", "cropR"
+                    // 3. 'tile.patternType' (e.g., "cropC_flip1" or "cropM_flip0") をパース
+                    const typeParts = tile.patternType.split('_'); 
+                    const cropType = typeParts[0]; // "cropL", "cropC", "cropR", "cropT", "cropM", "cropB"
                     const flipType = typeParts[1]; // "flip0", "flip1"
 
                     // 4. クロップタイプに応じて、ソース矩形(sx, sy)を決定
                     let sx = 0;
-                    const sy = 0; // 常に y=0
-                    if (cropType === "cropC") {
-                        sx = Math.floor((sWidth - sSize) / 2);
-                    } else if (cropType === "cropR") {
-                        sx = sWidth - sSize;
+                    let sy = 0;
+                    if (isHorizontal) {
+                        // 横長画像の場合 (Yは0固定、Xを動かす)
+                        if (cropType === "cropC") {
+                            sx = Math.floor((sWidth - sSize) / 2);
+                        } else if (cropType === "cropR") {
+                            sx = sWidth - sSize;
+                        }
+                    } else {
+                        // 縦長画像の場合 (Xは0固定、Yを動かす)
+                        if (cropType === "cropM") {
+                            sy = Math.floor((sHeight - sSize) / 2);
+                        } else if (cropType === "cropB") {
+                            sy = sHeight - sSize;
+                        }
                     }
-                    // "cropL" は sx = 0 のまま
+                    // "cropL" または "cropT" は (0, 0) のまま
 
                     // 5. 描画先の矩形（Canvas上の位置と、正方形のサイズ）
                     const dx = tile.x;
@@ -241,7 +248,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (flipType === "flip1") {
                         // 水平反転
                         ctx.scale(-1, 1);
-                        // 描画先を反転 (-dx - dWidth)
                         ctx.drawImage(img, 
                             sx, sy, sSize, sSize, // ソース矩形 (正方形)
                             -dx - dWidth, dy, dWidth, dHeight // 描画先矩形 (反転)
@@ -255,7 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                     ctx.restore();
                     
-                    // ★★★ ここまでが全面改修 ★★★
+                    // ★★★ ここまでが変更点 ★★★
 
                     ctx.filter = 'none';
                     loadedCount++;
