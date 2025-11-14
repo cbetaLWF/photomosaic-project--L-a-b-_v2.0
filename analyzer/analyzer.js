@@ -1,11 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // UI要素の取得
     const dropArea = document.getElementById('drop-area');
     const startButton = document.getElementById('start-analysis');
-    const downloadButton = document.getElementById('download-json-button');
+    const downloadButton = document.getElementById('download-zip-button'); // ★ ID変更
     const logDiv = document.getElementById('log');
+    const qualitySlider = document.getElementById('thumbnail-quality');
     
     let uploadedFiles = [];
-    let jsonResults = null; // 解析結果を保持する変数
+    let analysisResults = null; // ★ 変更点: Workerからの全結果 (JSON + Thumbnails)
 
     // --- ドロップゾーンの設定 ---
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -22,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         e.stopPropagation();
     }
+    
     dropArea.addEventListener('drop', handleDrop, false);
 
     function handleDrop(e) {
@@ -30,8 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (uploadedFiles.length > 0) {
             logDiv.textContent = `ログ: ${uploadedFiles.length}個の画像ファイルが選択されました。\nファイル名はそのまま使用されます。`;
             startButton.disabled = false;
-            downloadButton.disabled = true; // 新しいファイルがドロップされたら無効化
-            jsonResults = null;
+            downloadButton.disabled = true; 
+            analysisResults = null;
         } else {
             logDiv.textContent = 'ログ: 画像ファイルが見つかりません。';
             startButton.disabled = true;
@@ -43,15 +46,23 @@ document.addEventListener('DOMContentLoaded', () => {
     startButton.addEventListener('click', () => {
         if (uploadedFiles.length === 0) return;
         
-        logDiv.textContent = 'ログ: 解析を開始します... (UIフリーズを防ぐためWorkerを使用)';
+        logDiv.textContent = 'ログ: 解析とサムネイル生成を開始します... (Workerを使用)';
         startButton.disabled = true;
         downloadButton.disabled = true;
+        analysisResults = null;
         
-        // Workerを起動 (互換性維持のため worker.js を参照)
+        // Workerを起動
         const worker = new Worker('worker.js');
 
-        // Workerにファイルリストを送信
-        worker.postMessage({ files: uploadedFiles });
+        // ★ 変更点: サムネイル品質をWorkerに渡す
+        const thumbnailQuality = parseInt(qualitySlider.value) / 100.0; // 0.0 - 1.0
+
+        // Workerにファイルリストと設定を送信
+        worker.postMessage({ 
+            files: uploadedFiles,
+            thumbnailQuality: thumbnailQuality,
+            thumbnailSize: 100 // 将来的な拡張のため固定値
+        });
 
         // Workerからのメッセージ受信
         worker.onmessage = (e) => {
@@ -61,8 +72,10 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (e.data.type === 'error') {
                 logDiv.textContent += `\nERROR: ${e.data.message}`;
             } else if (e.data.type === 'complete') {
-                jsonResults = e.data.results;
-                logDiv.textContent = `\n--- 解析完了 --- \n${jsonResults.length}個のタイルデータを生成しました。JSONダウンロードボタンを押してください。`;
+                // ★ 変更点: JSONデータとサムネイルBlobの両方を受け取る
+                analysisResults = e.data.results; 
+                
+                logDiv.textContent = `\n--- 解析完了 --- \n${analysisResults.json.length}個のタイルデータと、${analysisResults.thumbnails.length}個のサムネイルを生成しました。\nZIPダウンロードボタンを押してください。`;
                 
                 downloadButton.disabled = false;
                 startButton.disabled = false;
@@ -77,30 +90,57 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     });
 
-    // --- JSONダウンロードボタン ---
-    downloadButton.addEventListener('click', () => {
-        if (!jsonResults) {
-            logDiv.textContent += '\nエラー: JSONデータがまだ生成されていません。';
+    // --- ★ 変更点: ZIPダウンロードボタン ---
+    downloadButton.addEventListener('click', async () => {
+        if (!analysisResults) {
+            logDiv.textContent += '\nエラー: 解析データがまだ生成されていません。';
             return;
         }
         
-        const jsonContent = JSON.stringify(jsonResults, null, 2);
-        const blob = new Blob([jsonContent], { type: 'application/json' });
+        logDiv.textContent += '\nZIPファイルを生成中です... (ファイル数が多いと時間がかかります)';
         
-        // Blob URLを生成し、ダウンロードを実行
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'tile_data.json';
-        
-        // ダウンロード実行 (DOMに一時的に追加してクリック)
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        URL.revokeObjectURL(url); // オブジェクトURLを解放
-        
-        logDiv.textContent += '\n\n★重要★ tile_data.jsonをダウンロードしました。\n次に、アップロードした画像ファイルをリネームせずに /mosaic/tiles/ フォルダに移動させてください。';
-        downloadButton.disabled = true;
+        try {
+            // JSZipのインスタンスを作成
+            const zip = new JSZip();
+
+            // 1. JSONデータをZIPに追加
+            const jsonContent = JSON.stringify(analysisResults.json, null, 2);
+            zip.file('tile_data.json', jsonContent);
+
+            // 2. サムネイル画像をZIPに追加 (tiles_thumb フォルダ内)
+            const thumbFolder = zip.folder('tiles_thumb');
+            analysisResults.thumbnails.forEach(thumb => {
+                // thumb.path は "image001.jpg" のようなファイル名
+                thumbFolder.file(thumb.path, thumb.blob);
+            });
+
+            // 3. ZIPファイルをBlobとして生成
+            const zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'DEFLATE',
+                compressionOptions: {
+                    level: 9 // 最大圧縮
+                }
+            });
+
+            // 4. Blob URLを生成し、ダウンロードを実行
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'photomosaic_data.zip';
+            
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            URL.revokeObjectURL(url); // オブジェクトURLを解放
+            
+            logDiv.textContent += '\n★完了★ photomosaic_data.zip をダウンロードしました。\n次に、このZIPファイルを展開し、中身を /mosaic/ フォルダに配置してください。\n(tile_data.json と tiles_thumb フォルダをそのままコピー)';
+            downloadButton.disabled = true;
+
+        } catch (error) {
+            logDiv.textContent += `\nZIP生成エラー: ${error.message}`;
+            console.error("ZIP generation failed:", error);
+        }
     });
 });
