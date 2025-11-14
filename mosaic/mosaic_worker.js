@@ -39,6 +39,7 @@ self.onmessage = async (e) => {
     const results = [];
     
     // ★ 変更点: 16:9 -> 1:1 (正方形)
+    // これが横長のタイルが描画されていた根本原因です
     const ASPECT_RATIO = 1.0; 
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); // = tileWidth
@@ -146,7 +147,7 @@ self.onmessage = async (e) => {
             if (bestMatch) {
                 results.push({
                     url: bestMatchUrl, // 実際に描画する画像URL
-                    patternType: bestMatch.type, // ★ 変更点: どの拡張パターンが選ばれたか
+                    patternType: bestMatch.type, // どの拡張パターンが選ばれたか
                     x: x,
                     y: y,
                     width: currentBlockWidth, // 正方形の幅
