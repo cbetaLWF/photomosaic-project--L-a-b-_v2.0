@@ -28,18 +28,19 @@ function getLstar(r, g, b) {
 }
 
 /**
- * ★ 変更点: サムネイル（Blob）を生成するヘルパー関数
+ * ★ 変更点: 1枚の「縮小版」サムネイルを生成する
  */
-async function createThumbnail(imageBitmap, crop, size, quality) {
-    const canvas = new OffscreenCanvas(size, size);
+async function createThumbnail(imageBitmap, thumbWidth, quality) {
+    // 元のアスペクト比を維持したまま、指定幅に縮小
+    const ratio = thumbWidth / imageBitmap.width;
+    const thumbHeight = Math.round(imageBitmap.height * ratio);
+    
+    const canvas = new OffscreenCanvas(thumbWidth, thumbHeight);
     const ctx = canvas.getContext('2d');
     
-    // 中央クロップ (cropC) と同じ正方形領域を描画
     ctx.drawImage(imageBitmap, 
-        crop.x, crop.y, // ソース (元画像) のクロップ位置
-        crop.sSize, crop.sSize, // ソースのサイズ (正方形)
-        0, 0,           // 描画先 (Canvas) の位置
-        size, size      // 描画先のサイズ (サムネイルサイズ)
+        0, 0, imageBitmap.width, imageBitmap.height, // ソース (元画像)
+        0, 0, thumbWidth, thumbHeight               // 描画先 (縮小)
     );
 
     // Blob (JPEG) を非同期で生成
@@ -51,9 +52,8 @@ async function createThumbnail(imageBitmap, crop, size, quality) {
 
 
 // 縦長/横長画像に対応したクロップと6パターン解析
-async function analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality) {
+async function analyzeImagePatterns(imageBitmap) {
     const patterns = [];
-    const thumbnails = []; // ★ 変更点: サムネイルBlobを格納する配列
 
     const baseWidth = imageBitmap.width;
     const baseHeight = imageBitmap.height;
@@ -85,12 +85,6 @@ async function analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality
     // 一時描画用のOffscreenCanvas (L*ベクトル解析用)
     const analysisCanvas = new OffscreenCanvas(sSize, sSize);
     const ctx = analysisCanvas.getContext('2d');
-
-    // ★ 変更点: サムネイルは「中央クロップ」のみを生成する
-    const centralCrop = cropSettings[1]; // cropC または cropM
-    const thumbnailBlob = await createThumbnail(imageBitmap, centralCrop, thumbnailSize, thumbnailQuality);
-    thumbnails.push(thumbnailBlob); // 1枚だけ生成
-
 
     // --- 3 (クロップ) x 2 (反転) = 6 パターンのループ ---
     for (const crop of cropSettings) {
@@ -142,17 +136,16 @@ async function analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality
             });
         }
     }
-    // ★ 変更点: L*パターン(6種)と、サムネイルBlob(1枚)を返す
-    return { patterns, thumbnails }; 
+    // ★ L*パターン(6種)を返す
+    return patterns;
 }
 
 
 // Workerで受け取った画像データ配列を処理
 self.onmessage = async (e) => {
-    // ★ 変更点: サムネイル設定を受け取る
+    // ★ 変更点: サムネイル設定を受け取る (thumbnailSizeは最大幅)
     const { files, thumbnailQuality, thumbnailSize } = e.data;
     
-    // ★ 変更点: 最終結果をJSON用とサムネイル用に分ける
     const jsonResults = [];
     const thumbnailResults = [];
     
@@ -165,12 +158,18 @@ self.onmessage = async (e) => {
         try {
             const imageBitmap = await createImageBitmap(file);
             
-            // ★ 変更点: 6パターンとサムネイル1枚を生成
-            const { patterns, thumbnails } = await analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality);
+            // 1. L*ベクトルパターン(6種)を生成
+            const patterns = await analyzeImagePatterns(imageBitmap);
+
+            // 2. ★ 変更点: 1枚の「縮小版」サムネイルを生成
+            const thumbnailBlob = await createThumbnail(imageBitmap, thumbnailSize, thumbnailQuality);
 
             // 1. JSON用データ
             const originalUrl = `tiles/${file.name}`;
+            // ★ 変更点: サムネイルのパスも同じファイル名にする
+            // (Mosaic Appは /tiles/ と /tiles_thumb/ を切り替えるため)
             const thumbUrl = originalUrl.replace('tiles/', 'tiles_thumb/');
+            
             jsonResults.push({
                 url: originalUrl, 
                 thumb_url: thumbUrl,
@@ -178,13 +177,10 @@ self.onmessage = async (e) => {
             });
             
             // 2. サムネイルBlobデータ (ZIP用)
-            // (thumbnails[0] が中央クロップのBlob)
-            if (thumbnails.length > 0) {
-                thumbnailResults.push({
-                    path: file.name, // ZIP内のパス (例: image001.jpg)
-                    blob: thumbnails[0]
-                });
-            }
+            thumbnailResults.push({
+                path: file.name, // ZIP内のパス (例: image001.jpg)
+                blob: thumbnailBlob
+            });
             
             self.postMessage({ type: 'progress', progress: (i + 1) / totalFiles, fileName: file.name });
 
@@ -193,7 +189,7 @@ self.onmessage = async (e) => {
         }
     }
 
-    // ★ 変更点: JSONとサムネイルBlobの両方をメインスレッドに渡す
+    // JSONとサムネイルBlobの両方をメインスレッドに渡す
     self.postMessage({ 
         type: 'complete', 
         results: {
