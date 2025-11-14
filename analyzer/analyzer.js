@@ -2,12 +2,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // UI要素の取得
     const dropArea = document.getElementById('drop-area');
     const startButton = document.getElementById('start-analysis');
-    const downloadButton = document.getElementById('download-zip-button'); // ★ ID変更
+    const downloadButton = document.getElementById('download-zip-button'); 
     const logDiv = document.getElementById('log');
     const qualitySlider = document.getElementById('thumbnail-quality');
+    const sizeSlider = document.getElementById('thumbnail-size'); // ★ 変更点
     
     let uploadedFiles = [];
-    let analysisResults = null; // ★ 変更点: Workerからの全結果 (JSON + Thumbnails)
+    let analysisResults = null; 
 
     // --- ドロップゾーンの設定 ---
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -54,14 +55,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // Workerを起動
         const worker = new Worker('worker.js');
 
-        // ★ 変更点: サムネイル品質をWorkerに渡す
+        // ★ 変更点: サムネイル品質とサイズをWorkerに渡す
         const thumbnailQuality = parseInt(qualitySlider.value) / 100.0; // 0.0 - 1.0
+        const thumbnailSize = parseInt(sizeSlider.value); // 50 - 640
 
         // Workerにファイルリストと設定を送信
         worker.postMessage({ 
             files: uploadedFiles,
             thumbnailQuality: thumbnailQuality,
-            thumbnailSize: 100 // 将来的な拡張のため固定値
+            thumbnailSize: thumbnailSize 
         });
 
         // Workerからのメッセージ受信
@@ -72,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (e.data.type === 'error') {
                 logDiv.textContent += `\nERROR: ${e.data.message}`;
             } else if (e.data.type === 'complete') {
-                // ★ 変更点: JSONデータとサムネイルBlobの両方を受け取る
+                // JSONデータとサムネイルBlobの両方を受け取る
                 analysisResults = e.data.results; 
                 
                 logDiv.textContent = `\n--- 解析完了 --- \n${analysisResults.json.length}個のタイルデータと、${analysisResults.thumbnails.length}個のサムネイルを生成しました。\nZIPダウンロードボタンを押してください。`;
@@ -90,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     });
 
-    // --- ★ 変更点: ZIPダウンロードボタン ---
+    // --- ZIPダウンロードボタン ---
     downloadButton.addEventListener('click', async () => {
         if (!analysisResults) {
             logDiv.textContent += '\nエラー: 解析データがまだ生成されていません。';
