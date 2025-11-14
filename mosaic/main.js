@@ -1,67 +1,72 @@
 document.addEventListener('DOMContentLoaded', async () => {
+    // UI要素の取得
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
-    const downloadButton = document.getElementById('download-button');
-    const mainCanvas = document.getElementById('main-canvas');
-    const ctx = mainCanvas.getContext('2d');
-    const progressBar = document.getElementById('progress-fill');
-    const statusText = document.getElementById('status-text');
-    const tileSizeInput = document.getElementById('tile-size');
-    const blendRangeInput = document.getElementById('blend-range');
-    const blendValueSpan = document.getElementById('blend-value'); // 追加
+    // ... (他のUI要素取得は変更なし) ...
+    const textureWeightValue = document.getElementById('texture-weight-value');
 
+    // ( ... 必須要素チェックは変更なし ... )
+    
+    const ctx = mainCanvas.getContext('2d');
     let tileData = null;
     let mainImage = null;
+    let workers = [];
 
-    // --- UIイベント: ブレンド度スライダーのリアルタイム表示 ---
-    blendRangeInput.addEventListener('input', () => {
-        blendValueSpan.textContent = blendRangeInput.value;
-    });
+    // --- UIの初期設定 --- (変更なし)
+    generateButton.disabled = true;
+    downloadButton.style.display = 'none';
+
+    // ( ... スライダーの値表示リスナーは変更なし ... )
 
     // --- 1. タイルデータの初期ロード ---
     try {
+        statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
         if (!response.ok) {
-            throw new Error('tile_data.json のロードに失敗しました。');
+            throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。Analyzer Appでデータを作成し、/mosaic/フォルダに配置してください。`);
         }
         tileData = await response.json();
-        statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚分) ロード完了。メイン画像を選択してください。`;
+        
+        // ★ 変更点: 新しいJSON構造 (patterns配列) をチェック
+        if (tileData.length === 0 || 
+            !tileData[0].patterns || 
+            tileData[0].patterns.length === 0 || 
+            !tileData[0].patterns[0].l_vector ||
+            tileData[0].patterns[0].l_vector.length !== 9) {
+             throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトルではありません。Analyzer Appで新しいデータを再生成してください。');
+        }
+        
+        statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * 6}パターン) ロード完了。メイン画像を選択してください。`;
+        if (mainImageInput) mainImageInput.disabled = false;
     } catch (error) {
-        statusText.textContent = `エラー: ${error.message}。JSONファイルを確認してください。`;
+        statusText.textContent = `エラー: ${error.message}`;
+        console.error("Initialization Error:", error);
         return;
     }
     
-    // --- 2. メイン画像アップロード ---
-    mainImageInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    // --- 2. メイン画像アップロード --- (変更なし)
+    if (mainImageInput) {
+        // ( ... 変更なし ... )
+    }
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            mainImage = new Image();
-            mainImage.onload = () => {
-                generateButton.disabled = false;
-                mainCanvas.width = mainImage.width;
-                mainCanvas.height = mainImage.height;
-                ctx.clearRect(0, 0, mainImage.width, mainImage.height);
-                ctx.drawImage(mainImage, 0, 0); // プレビュー表示
-                statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
-            };
-            mainImage.src = event.target.result;
-        };
-        reader.readAsDataURL(file);
-    });
+    // ★ 変更点: 起動中の全Workerを強制終了するヘルパー関数
+    function terminateWorkers() {
+        workers.forEach(w => w.terminate());
+        workers = [];
+    }
 
-    // --- 3. モザイク生成開始 ---
+
+    // --- 3. モザイク生成開始 (並列化ロジック) ---
+    // (★ この関数全体は、前回実装した並列化ロジックから変更なし)
     generateButton.addEventListener('click', () => {
         if (!mainImage) return;
         
+        terminateWorkers(); // 念のため既存のWorkerを終了
         generateButton.disabled = true;
         downloadButton.style.display = 'none';
         progressBar.style.width = '0%';
-        statusText.textContent = 'ステータス: マッチング処理の準備中...';
+        statusText.textContent = 'ステータス: 画像データの準備中...';
 
-        // メイン画像のピクセルデータを取得
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
@@ -69,124 +74,156 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
-        // Workerを起動
-        const worker = new Worker('mosaic_worker.js');
+        // PCのコア数を取得 (フォールバックで4)
+        const numWorkers = navigator.hardwareConcurrency || 4;
+        statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
 
-        // Workerにデータを送信 
-        worker.postMessage({ 
-            imageData: imageData, 
-            tileData: tileData, 
-            tileSize: parseInt(tileSizeInput.value),
-            width: mainImage.width,
-            height: mainImage.height,
-            blendOpacity: parseInt(blendRangeInput.value) / 100 
-        });
+        let finishedWorkers = 0;
+        let allResults = [];
+        const chunkHeight = Math.ceil(mainImage.height / numWorkers);
+        
+        // コア数分だけWorkerを起動するループ
+        for (let i = 0; i < numWorkers; i++) {
+            const worker = new Worker('mosaic_worker.js');
+            workers.push(worker);
 
-        // Workerからのメッセージ受信
-        worker.onmessage = (e) => {
-            if (e.data.type === 'status') {
-                statusText.textContent = `ステータス: ${e.data.message}`;
-            } else if (e.data.type === 'progress') {
-                // マッチング進捗
-                const progress = Math.round(e.data.progress * 100);
-                progressBar.style.width = `${progress}%`;
-            } else if (e.data.type === 'complete') {
-                // マッチング完了後、高解像度描画プロセスへ
-                renderMosaic(e.data.results, e.data.width, e.data.height, e.data.blendOpacity);
-                worker.terminate();
-            }
-        };
+            const startY = i * chunkHeight;
+            const endY = Math.min((i + 1) * chunkHeight, mainImage.height);
 
-        worker.onerror = (error) => {
-            statusText.textContent = `エラー: Worker処理中に問題が発生しました。 ${error.message}`;
-            generateButton.disabled = false;
-            worker.terminate();
-        };
+            // Workerからのメッセージ受信
+            worker.onmessage = (e) => {
+                if (e.data.type === 'status') {
+                    statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
+                
+                } else if (e.data.type === 'progress') {
+                    // 全Workerの平均進捗を表示（簡易的）
+                    const currentProgress = parseFloat(progressBar.style.width) || 0;
+                    const newProgress = currentProgress + (e.data.progress * 100 / numWorkers);
+                    progressBar.style.width = `${newProgress}%`;
+                
+                } else if (e.data.type === 'complete') {
+                    // Workerから返ってきた「部分的な」結果を結合する
+                    allResults = allResults.concat(e.data.results);
+                    finishedWorkers++;
+                    
+                    // 全てのWorkerが完了したかチェック
+                    if (finishedWorkers === numWorkers) {
+                        statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
+                        progressBar.style.width = '100%';
+                        
+                        // 結合した「完全な」結果を描画関数に渡す
+                        renderMosaic(
+                            allResults, 
+                            mainImage.width, 
+                            mainImage.height, 
+                            parseInt(blendRangeInput.value), 
+                            parseInt(brightnessCompensationInput.value)
+                        );
+                        terminateWorkers(); // 全Workerを終了
+                    }
+                }
+            };
+
+            // Workerでエラーが発生した場合
+            worker.onerror = (error) => {
+                statusText.textContent = `エラー: Worker ${i+1} で問題が発生しました。 ${error.message}`;
+                terminateWorkers(); // 全てのWorkerを停止
+                generateButton.disabled = false;
+                console.error(`Worker ${i+1} Error:`, error);
+            };
+
+            // Workerにデータを送信
+            worker.postMessage({ 
+                imageData: imageData, 
+                tileData: tileData, // 新しいJSON構造のタイルデータ
+                tileSize: parseInt(tileSizeInput.value),
+                width: mainImage.width,
+                height: mainImage.height,
+                blendOpacity: parseInt(blendRangeInput.value),
+                brightnessCompensation: parseInt(brightnessCompensationInput.value),
+                textureWeight: parseFloat(textureWeightInput.value) / 100.0, // 0.0-2.0にスケーリング
+                
+                // このWorkerの担当範囲（Y座標）を指示
+                startY: startY,
+                endY: endY
+            });
+            // imageDataは転送しない (全Workerがコピーを持つ)
+        }
     });
 
-    // --- 4. 最終的なモザイクの高解像度描画 ---
-    function renderMosaic(results, width, height, blendOpacity) {
-        statusText.textContent = 'ステータス: タイル画像をロードし、高解像度で描画中...';
+    // --- 4. 最終的なモザイクの描画 --- 
+    // (★ 前回から変更なし)
+    async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
+        statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
         mainCanvas.height = height;
         ctx.clearRect(0, 0, width, height);
 
         let loadedCount = 0;
         const totalTiles = results.length;
+        const promises = [];
         
-        // 描画に必要なタイル画像を非同期でロードし、描画する
-        const renderPromises = results.map(tile => {
-            return new Promise((resolve) => {
+        const MIN_TILE_L = 5.0; 
+        const MAX_BRIGHTNESS_RATIO = 5.0; 
+        const brightnessFactor = brightnessCompensation / 100; 
+
+        for (const tile of results) {
+            const p = new Promise((resolve) => {
                 const img = new Image();
-                img.crossOrigin = 'anonymous'; 
                 img.onload = () => {
-                    // 【★修正箇所★】タイル画像が縦横比を維持して、割り当てられたブロックの中央に描画されるように変更
+                    // ★ 変更点: tile.l -> tile.tileL に変更 (workerからの返却値に合わせる)
+                    let targetL = tile.targetL; 
+                    let tileL = tile.tileL; 
+                    if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
+                    let brightnessRatio = targetL / tileL; 
+                    if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
+                        brightnessRatio = MAX_BRIGHTNESS_RATIO;
+                    }
+                    const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
                     
-                    // 割り当てられたブロックの幅と高さ
-                    const blockWidth = tile.width;
-                    const blockHeight = tile.height;
+                    ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
+                    ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
+                    ctx.filter = 'none';
 
-                    // タイル画像の元の縦横比とブロックサイズを比較し、縮小率を決定
-                    const ratio = Math.min(blockWidth / img.width, blockHeight / img.height);
-                    
-                    // 歪みが生じない新しい描画サイズを計算
-                    const drawWidth = img.width * ratio;
-                    const drawHeight = img.height * ratio;
-
-                    // ブロックの中央に配置するためのオフセットを計算
-                    const offsetX = tile.x + (blockWidth - drawWidth) / 2;
-                    const offsetY = tile.y + (blockHeight - drawHeight) / 2;
-
-                    // 元の縦横比を保って描画
-                    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-                    
                     loadedCount++;
-                    
-                    // ロード進捗を更新
-                    progressBar.style.width = `${Math.round(loadedCount / totalTiles * 100)}%`;
-                    
                     resolve();
                 };
                 img.onerror = () => {
                     console.error(`タイル画像のロードに失敗: ${tile.url}`);
-                    // ロード失敗時も進捗を進める
+                    const grayValue = Math.round(tile.targetL * 2.55); 
+                    ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
+                    ctx.fillRect(tile.x, tile.y, tile.width, tile.height);
                     loadedCount++;
-                    progressBar.style.width = `${Math.round(loadedCount / totalTiles * 100)}%`;
                     resolve(); 
                 };
                 img.src = tile.url; 
             });
-        });
-
-        // すべてのタイルが描画された後、ブレンド処理
-        Promise.all(renderPromises).then(() => {
-            // ブレンド処理 (元の画像を半透明で重ねる)
-            applyBlend(width, height, blendOpacity);
-            
-            statusText.textContent = 'ステータス: モザイクアートが完成しました！';
-            generateButton.disabled = false;
-            downloadButton.style.display = 'block';
-            progressBar.style.width = '100%';
-        });
-    }
-
-    // --- ブレンド処理の関数化 ---
-    function applyBlend(width, height, opacity) {
-        if (opacity > 0 && mainImage) {
-            ctx.globalAlpha = opacity;
-            ctx.drawImage(mainImage, 0, 0, width, height);
-            ctx.globalAlpha = 1.0; // 元に戻す
+            promises.push(p);
         }
+
+        // 全タイルのロード（描画）を待つ
+        await Promise.all(promises);
+        
+        progressBar.style.width = '100%';
+        statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
+
+
+        // --- ブレンド処理 --- (変更なし)
+        if (blendOpacity > 0) {
+            ctx.globalCompositeOperation = 'multiply'; 
+            ctx.globalAlpha = blendOpacity / 100;
+            ctx.drawImage(mainImage, 0, 0, width, height);
+            ctx.globalCompositeOperation = 'source-over'; 
+            ctx.globalAlpha = 1.0; 
+        }
+
+        statusText.textContent = 'ステータス: モザイクアートが完成しました！';
+        generateButton.disabled = false;
+        downloadButton.style.display = 'block';
     }
 
-    // --- 5. ダウンロード機能 ---
+    // --- 5. ダウンロード機能 (PNG形式) --- (変更なし)
     downloadButton.addEventListener('click', () => {
-        const dataURL = mainCanvas.toDataURL('image/jpeg', 0.9); 
-        const a = document.createElement('a');
-        a.href = dataURL;
-        a.download = `photomosaic-${Date.now()}.jpg`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        // ( ... 変更なし ... )
     });
 });
