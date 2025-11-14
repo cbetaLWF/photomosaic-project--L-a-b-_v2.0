@@ -340,7 +340,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 1. 従来の「陰影」ブレンド (Multiply)
         if (blendOpacity > 0) {
-            ctx.globalCompositeOperation = 'multiply'; 
+            ctx.globalCompositeOperation = 'soft-light'; // 'multiply' から変更
             ctx.globalAlpha = blendOpacity / 100;
             ctx.drawImage(mainImage, 0, 0, width, height);
         }
@@ -367,3 +367,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         // ( ... 変更なし ... )
     });
 });
+
