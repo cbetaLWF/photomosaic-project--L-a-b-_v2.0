@@ -192,7 +192,14 @@
                 </div>
             </div>
 
-            <!-- ★ 変更点: 高速プレビューモードを削除 (常にフル解像度ロード) -->
+            <!-- ★ 変更点: 高速プレビューモードを再追加 -->
+            <div class="control-group flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="preview-mode-checkbox" checked class="h-5 w-5 rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="preview-mode-checkbox" class="mb-0 font-medium">高速プレビューモード</label>
+                </div>
+                <p class="text-xs text-gray-500 mt-0">（サムネイル画像で描画を高速化）</p>
+            </div>
             
             <button id="generate-button" disabled>ステップ4: モザイク生成 (プレビュー)</button>
         </div>
