@@ -45,7 +45,8 @@
                 <div>
                     <label for="tile-size">タイル幅 (px):</label>
                     <input type="number" id="tile-size" value="20" min="10" max="100" class="w-full p-2 border border-gray-300 rounded-md">
-                    <p class="text-xs text-gray-500 mt-1">タイル高さは自動的に16:9比率に調整されます。</p>
+                    <!-- ★ 変更点: 16:9 -> 正方形 -->
+                    <p class="text-xs text-gray-500 mt-1">タイル高さはタイル幅と同じ（正方形）に調整されます。</p>
                 </div>
                 <div>
                     <label for="blend-range">ブレンド度 (元画像の透明度 %): <span id="blend-value">30</span>%</label>
@@ -56,6 +57,7 @@
                     <input type="range" id="brightness-compensation" min="0" max="100" value="100" class="w-full" oninput="document.getElementById('brightness-compensation-value').textContent = this.value">
                     <p class="text-xs text-gray-500 mt-1">100%でターゲットL*に一致。</p>
                 </div>
+                <!-- ★ 変更点: 「テクスチャ重視度」スライダー (前回差し戻し済み) -->
                 <div>
                     <label for="texture-weight">テクスチャ重視度: <span id="texture-weight-value">50</span></label>
                     <input type="range" id="texture-weight" min="0" max="200" value="50" class="w-full" oninput="document.getElementById('texture-weight-value').textContent = this.value">
@@ -75,6 +77,7 @@
         <button id="download-button" style="display: none;" class="w-full p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-md transition-colors">結果をダウンロード (PNG/ロスレス)</button>
     </div>
 
+    <!-- JavaScript Files (互換性維持のため、サフィックスなしのファイル名を参照) -->
     <script src="main.js"></script>
     <script src="mosaic_worker.js"></script> 
 </body>
