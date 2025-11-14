@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
-    // ( ... UI要素の取得 ... )
+    // UI要素の取得
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
@@ -10,10 +10,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const blendRangeInput = document.getElementById('blend-range');
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
+    
+    // 「テクスチャ重視度」スライダー
     const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
     
-    // ( ... 必須要素チェック ... )
+    // 全ての必須要素が存在するかチェック
     if (!mainCanvas || !statusText || !generateButton) {
         console.error("Initialization Error: One or more required HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status) are missing from the HTML.</p>";
@@ -25,9 +27,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     let mainImage = null;
     let workers = [];
 
-    // ( ... UIの初期設定 (スライダーリスナー含む) ... )
+    // --- UIの初期設定 ---
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
+
+    // ( ... スライダーのリスナー ... )
     if (brightnessCompensationInput && brightnessCompensationValue) {
         brightnessCompensationInput.addEventListener('input', () => {
             brightnessCompensationValue.textContent = brightnessCompensationInput.value;
@@ -68,7 +72,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 2. メイン画像アップロード ---
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
-            // ( ... 変更なし ... )
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
@@ -97,14 +100,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 3. モザイク生成開始 (並列化ロジック) ---
     generateButton.addEventListener('click', () => {
-        // ( ... 変更なし: 並列でWorkerを起動し、結果を待つ ... )
         if (!mainImage) return;
-        terminateWorkers();
+        
+        terminateWorkers(); // 念のため既存のWorkerを終了
         generateButton.disabled = true;
         downloadButton.style.display = 'none';
         progressBar.style.width = '0%';
         statusText.textContent = 'ステータス: 画像データの準備中...';
-        
+
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
@@ -112,30 +115,63 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
+        // PCのコア数を取得 (フォールバックで4)
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
 
         let finishedWorkers = 0;
         let allResults = [];
-        const chunkHeight = Math.ceil(mainImage.height / numWorkers);
+
+        // ★★★ ここからが修正点 ★★★
+
+        // 1. タイルの高さを取得 (アスペクト比 1.0)
+        const tileSize = parseInt(tileSizeInput.value);
+        const tileHeight = Math.round(tileSize * 1.0); 
+
+        // 2. 画像全体の高さを、タイルの高さの倍数に切り上げる (例: 1080 -> 1080, 1085 -> 1100)
+        const alignedHeight = Math.ceil(mainImage.height / tileHeight) * tileHeight;
         
+        // 3. チャンクの高さを、タイルの高さの倍数になるように計算
+        // (例: 1080 / 4 = 270。 270 / 20 = 13.5 -> 14 (切り上げ) * 20 = 280px)
+        const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
+
+        let startY = 0;
+        let activeWorkers = 0; // 実際に起動したWorkerの数
+        
+        // コア数分だけWorkerを起動するループ
         for (let i = 0; i < numWorkers; i++) {
+            // 4. endY の計算 (startY + チャンク高 or 画像の高さ)
+            const endY = Math.min(startY + chunkHeight, mainImage.height);
+
+            // 5. このWorkerが担当する行が残っているかチェック
+            if (startY >= endY) {
+                // (例: 5人目のWorkerだが、4人目で処理が終わった場合)
+                continue; // このWorkerは起動しない
+            }
+            
+            activeWorkers++; // 起動するWorkerをカウント
+            
+            // ★★★ ここまでが修正点 ★★★
+
+
             const worker = new Worker('mosaic_worker.js');
             workers.push(worker);
-            const startY = i * chunkHeight;
-            const endY = Math.min((i + 1) * chunkHeight, mainImage.height);
 
+            // Workerからのメッセージ受信
             worker.onmessage = (e) => {
                 if (e.data.type === 'status') {
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
                 } else if (e.data.type === 'progress') {
                     const currentProgress = parseFloat(progressBar.style.width) || 0;
-                    const newProgress = currentProgress + (e.data.progress * 100 / numWorkers);
+                    // ★ 修正点: numWorkers -> activeWorkers で割る
+                    const newProgress = currentProgress + (e.data.progress * 100 / activeWorkers);
                     progressBar.style.width = `${newProgress}%`;
                 } else if (e.data.type === 'complete') {
                     allResults = allResults.concat(e.data.results);
                     finishedWorkers++;
-                    if (finishedWorkers === numWorkers) {
+                    
+                    // ★ 修正点: numWorkers -> activeWorkers と比較
+                    if (finishedWorkers === activeWorkers) {
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
                         progressBar.style.width = '100%';
                         renderMosaic(
@@ -155,10 +191,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 generateButton.disabled = false;
                 console.error(`Worker ${i+1} Error:`, error);
             };
+
+            // Workerにデータを送信
             worker.postMessage({ 
                 imageData: imageData, 
                 tileData: tileData,
-                tileSize: parseInt(tileSizeInput.value),
+                tileSize: tileSize, // 修正: tileSizeInput.value -> tileSize
                 width: mainImage.width,
                 height: mainImage.height,
                 blendOpacity: parseInt(blendRangeInput.value),
@@ -167,22 +205,32 @@ document.addEventListener('DOMContentLoaded', async () => {
                 startY: startY,
                 endY: endY
             });
+            
+            // 次のWorkerの開始Y座標を更新
+            startY += chunkHeight;
+        }
+
+        // ★ 修正点: 誰も起動しなかった場合 (画像が小さすぎるなど)
+        if (activeWorkers === 0) {
+            statusText.textContent = 'ステータス: 画像が小さすぎるか、処理する行がありません。';
+            generateButton.disabled = false;
         }
     });
 
     // --- 4. 最終的なモザイクの描画 ---
+    // (クリッピングロジックを含む、前回答のまま)
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
         mainCanvas.height = height;
         ctx.clearRect(0, 0, width, height);
 
-        // ★ 変更点: ここからクリッピング設定
-        ctx.save(); // 現在の描画状態を保存
+        // ★ クリッピング設定
+        ctx.save(); 
         ctx.beginPath();
-        ctx.rect(0, 0, width, height); // Canvasの境界(0,0,width,height)で矩形パスを作成
-        ctx.clip(); // このパスの内側だけを描画領域にする
-        // ★ 変更点: ここまでクリッピング設定
+        ctx.rect(0, 0, width, height); 
+        ctx.clip(); 
+        // ★ クリッピング設定ここまで
 
         let loadedCount = 0;
         const totalTiles = results.length;
@@ -231,7 +279,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                             sy = sHeight - sSize;
                         }
                     }
-                    // ★ 変更点: dWidth/dHeight は worker からのフルサイズ (tileWidth/tileHeight)
                     const dx = tile.x;
                     const dy = tile.y;
                     const dWidth = tile.width; 
@@ -271,8 +318,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         await Promise.all(promises);
         
-        // ★ 変更点: クリッピングを解除
-        ctx.restore(); // save() した時点の状態（クリッピングなし）に戻す
+        ctx.restore(); // クリッピングを解除
 
         progressBar.style.width = '100%';
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
