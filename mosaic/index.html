@@ -15,7 +15,7 @@
         #controls button:disabled { background-color: #93c5fd; cursor: not-allowed; }
         #controls button:hover:enabled { background-color: #2563eb; }
         
-        /* ★ 変更点: 推奨値エリアのスタイル */
+        /* ( ... 推奨値エリアのスタイル ... ) */
         #recommendation-area {
             display: none; /* JSで表示 */
             background-color: #fefce8; /* 黄色っぽい背景 */
@@ -57,7 +57,6 @@
             background-color: #d97706;
         }
 
-
         #progress-bar { width: 100%; height: 10px; background: #e0e7ff; border-radius: 5px; margin-top: 10px; overflow: hidden; }
         #progress-fill { height: 100%; width: 0%; background: #4f46e5; transition: width 0.3s; }
         #status-text { margin-top: 10px; font-style: italic; color: #6b7280; }
@@ -83,7 +82,7 @@
                 <label for="main-image-input">ステップ1: メイン画像をアップロード</label>
                 <input type="file" id="main-image-input" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
                 
-                <!-- ★ 変更点: 推奨値エリアをここに追加 -->
+                <!-- 推奨値エリア -->
                 <div id="recommendation-area">
                     <h3><span class="text-yellow-600">💡</span> 画像の推奨パラメータ</h3>
                     <div id="recommendation-values">
@@ -95,10 +94,8 @@
                     </div>
                     <button id="apply-recommendations-button">推奨値をスライダーに適用</button>
                 </div>
-                <!-- ★ 変更点ここまで -->
             </div>
 
-            <!-- ★ 変更点: UIの順番を変更 (ステップ2: パラメータ設定) -->
             <div class="control-group">
                 <label>ステップ2: パラメータ設定 (推奨値から調整可)</label>
                 <div class="grid md:grid-cols-3 gap-4 mt-2">
@@ -128,6 +125,15 @@
                         <p class="text-xs text-gray-500 mt-1">元画像の輪郭(Multiply)を重ねます。</p>
                     </div>
                 </div>
+            </div>
+            
+            <!-- ★ 変更点: 高速プレビューモードのチェックボックス -->
+            <div class="control-group flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="preview-mode-checkbox" checked class="h-5 w-5 rounded text-indigo-600 focus:ring-indigo-500">
+                    <label for="preview-mode-checkbox" class="mb-0 font-medium">高速プレビューモード</label>
+                </div>
+                <p class="text-xs text-gray-500 mt-0">（サムネイル画像で描画を高速化。ダウンロード時は自動で高画質版を生成します）</p>
             </div>
             
             <button id="generate-button" disabled>ステップ3: モザイク生成開始</button>
