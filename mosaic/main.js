@@ -1,4 +1,4 @@
-// 線画抽出（Sobel）のためのヘルパー関数
+// ★ 変更点: 線画抽出（Sobel）を「複数閾値」で評価するように変更
 function applySobelFilter(imageData) {
     const width = imageData.width;
     const height = imageData.height;
@@ -12,8 +12,8 @@ function applySobelFilter(imageData) {
         grayscaleData[i / 4] = gray;
     }
 
-    // sobelDataを「透明」で初期化 (すべて0)
-    const sobelData = new Uint8ClampedArray(data.length);
+    // 最終描画用の線画データ (透明で初期化)
+    const finalSobelData = new Uint8ClampedArray(data.length);
     
     const Gx = [
         [-1, 0, 1],
@@ -26,10 +26,17 @@ function applySobelFilter(imageData) {
         [1, 2, 1]
     ];
     
-    const threshold = 30; 
-    let sumAlpha = 0; // ★ 変更点: ディテール量を測るためにAlphaの合計値を計算
+    // ★ 変更点: 3段階の閾値
+    const thresholds = {
+        low: 15,  // 弱いディテール（質感）
+        med: 30,  // 最終描画用の線画
+        high: 80  // 強い輪郭（アニメ線など）
+    };
+    
+    // ★ 変更点: 3段階のディテール量を格納するベクトル
+    const detailVector = { low: 0, med: 0, high: 0 };
 
-    // 2. Sobelフィルタ適用
+    // 2. Sobelフィルタ適用 (1回のループで全て計算)
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             let sumX = 0;
@@ -47,27 +54,42 @@ function applySobelFilter(imageData) {
             const magnitude = Math.sqrt(sumX * sumX + sumY * sumY);
             const i = (y * width + x) * 4;
 
-            if (magnitude > threshold) {
-                sobelData[i] = 0; // R (黒)
-                sobelData[i + 1] = 0; // G (黒)
-                sobelData[i + 2] = 0; // B (黒)
+            // 1. 最終描画用の線画データ (med threshold)
+            if (magnitude > thresholds.med) {
                 const alpha = Math.min(255, magnitude * 1.5);
-                sobelData[i + 3] = alpha; // A (不透明度)
-                sumAlpha += alpha; // ★ 変更点: ディテール量として加算
+                finalSobelData[i] = 0;     // R (黒)
+                finalSobelData[i + 1] = 0; // G (黒)
+                finalSobelData[i + 2] = 0; // B (黒)
+                finalSobelData[i + 3] = alpha; // A (不透明度)
+                
+                detailVector.med += alpha; // 中ディテール量
+            }
+            
+            // 2. 賢い評価用の特徴ベクトル
+            // (magnitude自体を加算することで、弱い線と強い線の差を明確にする)
+            if (magnitude > thresholds.low) {
+                detailVector.low += magnitude; 
+            }
+            if (magnitude > thresholds.high) {
+                detailVector.high += magnitude;
             }
         }
     }
-    // ★ 変更点: ImageDataとディテール量（Alpha合計）を返す
-    return { imageData: new ImageData(sobelData, width, height), sumAlpha: sumAlpha };
+    
+    // ★ 変更点: 最終的な線画ImageDataと、ディテールベクトルを返す
+    return { 
+        finalEdgeImageData: new ImageData(finalSobelData, width, height), 
+        detailVector: detailVector 
+    };
 }
 // ★ ヘルパー関数ここまで
 
 
-// ★ 変更点: 画像を分析し、推奨値を返すヘルパー関数
-function analyzeImageAndGetRecommendations(image, imageData) {
+// ★ 変更点: 画像を分析し、推奨値を返すヘルパー関数 (ディテールベクトル使用)
+function analyzeImageAndGetRecommendations(image, analysisImageData) {
     const width = image.width;
     const height = image.height;
-    const data = imageData.data; // analysisSizeに縮小済みのピクセルデータ
+    const data = analysisImageData.data; // analysisSizeに縮小済みのピクセルデータ
     
     // 1. 平均輝度(Luma)を計算 (変更なし)
     let sumLuma = 0;
@@ -78,15 +100,14 @@ function analyzeImageAndGetRecommendations(image, imageData) {
     const pixelCount = data.length / 4;
     const meanLuma = sumLuma / pixelCount; // 平均輝度 (0-255)
     
-    // 2. ★ 変更点: Sobelフィルタを実行して「ディテール量」を取得
-    // (縮小済みimageDataをSobelにかけるため高速)
-    const edgeResult = applySobelFilter(imageData);
-    const edgeImageData = edgeResult.imageData; // 線画データ（本番でも使用）
-    const sumAlpha = edgeResult.sumAlpha;       // ディテール量（Alpha合計）
+    // 2. ★ 変更点: Sobelフィルタを実行して「ディテールベクトル」を取得
+    const edgeResult = applySobelFilter(analysisImageData);
+    const detailVector = edgeResult.detailVector;
     
-    // ディテール量を 0.0 〜 255.0 の平均アルファ値に正規化
-    const detailAmount = sumAlpha / pixelCount; 
-    // (目安: のっぺりした画像=5, 通常=10-20, ディテール多い=30+)
+    // ディテール量を正規化 (ピクセル数で割る)
+    const detailLow = detailVector.low / pixelCount;   // 弱いディテール（実写の質感など）
+    const detailHigh = detailVector.high / pixelCount; // 強い輪郭（アニメ線など）
+    // (目安: detailLow=10-50, detailHigh=0-10)
     
     // 3. 推奨値を決定
     const recommendations = {};
@@ -99,19 +120,21 @@ function analyzeImageAndGetRecommendations(image, imageData) {
     // L*明度補正: 常に100
     recommendations.brightnessCompensation = 100;
     
-    // ★ 変更点: テクスチャ重視度 -> ディテール量(detailAmount)が多いほど高く
-    recommendations.textureWeight = Math.round(Math.min(200, detailAmount * 5.0 + 20)); 
-    // (例: detailAmount=10 -> 70, detailAmount=20 -> 120)
+    // ★ 変更点: テクスチャ重視度 -> 弱いディテール(detailLow)が多いほど高く
+    // (実写や質感の多い絵ほどテクスチャを重視)
+    recommendations.textureWeight = Math.round(Math.min(200, detailLow * 3.0 + 30)); 
+    // (例: detailLow=10 -> 60, detailLow=40 -> 150)
 
     // ブレンド度(陰影): 暗い画像ほど弱く (変更なし)
     recommendations.blendRange = Math.round(Math.max(10, meanLuma / 7.0)); 
 
-    // ★ 変更点: 線画の強さ -> ディテール量(detailAmount)が少ないほど強く
-    recommendations.edgeOpacity = Math.round(Math.max(10, 60 - detailAmount * 1.5));
-    // (例: detailAmount=10 -> 45, detailAmount=20 -> 30)
+    // ★ 変更点: 線画の強さ -> 強い輪郭(detailHigh)が少ないほど強く
+    // (アニメ塗りのように輪郭が少ない画像ほど、線画を補強する)
+    recommendations.edgeOpacity = Math.round(Math.max(10, 60 - detailHigh * 10.0));
+    // (例: detailHigh=1 -> 50, detailHigh=4 -> 20)
     
-    // ★ 変更点: 計算済みの線画データも返す
-    return { recommendations, edgeImageData };
+    // ★ 変更点: 推奨値のみを返す
+    return recommendations;
 }
 // ★ ヘルパー関数ここまで
 
@@ -153,7 +176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let tileData = null;
     let mainImage = null;
     let workers = [];
-    let edgeCanvas = null; // ★ 変更点: ここではnullのまま
+    let edgeCanvas = null; // ★ 変更点: 事前計算した線画をここに保存
     let currentRecommendations = null;
 
 
@@ -184,7 +207,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // --- 2. メイン画像アップロード ---
-    // (★ 変更点: 線画も同時に計算・保持する)
+    // (★ 変更点: 線画の「事前計算」ロジックを追加)
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -202,7 +225,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     statusText.textContent = `ステータス: 画像ロード完了。推奨値を計算中...`;
 
                     try {
-                        // ★ 変更点: 分析用の縮小画像データを作成
+                        // 1. 推奨値計算 (縮小画像で高速に)
                         const analysisSize = 400; 
                         const ratio = analysisSize / Math.max(mainImage.width, mainImage.height);
                         const w = mainImage.width * ratio;
@@ -212,22 +235,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                         analysisCtx.drawImage(mainImage, 0, 0, w, h);
                         const analysisImageData = analysisCtx.getImageData(0, 0, w, h);
 
-                        // ★ 変更点: 縮小画像データを使って分析
-                        const { recommendations, edgeImageData } = analyzeImageAndGetRecommendations(mainImage, analysisImageData);
+                        // 縮小画像データを使って分析 (ここでSobelが1回実行される)
+                        const recommendations = analyzeImageAndGetRecommendations(mainImage, analysisImageData);
                         
                         currentRecommendations = recommendations; // 推奨値を保持
-                        
-                        // ★ 変更点: 分析時に生成された線画をフルサイズのCanvasに描画して保持
-                        // (フルサイズのSobelを再度実行するのを防ぐため)
-                        edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
-                        const edgeCtx = edgeCanvas.getContext('2d');
-                        // まずフルサイズの線画を生成
-                        const fullImageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
-                        const fullEdgeResult = applySobelFilter(fullImageData);
-                        edgeCtx.putImageData(fullEdgeResult.imageData, 0, 0);
 
+                        // 2. ★ 変更点: 最終描画用の線画 (フルサイズで計算)
+                        // (この処理は重いが、アップロード時に1回だけ実行される)
+                        statusText.textContent = `ステータス: フルサイズの線画を事前計算中...`;
+                        const fullImageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
+                        // ここでSobelが2回目実行される（これが重複実行）
+                        // ★ 変更点: fullEdgeResult を取得
+                        const fullEdgeResult = applySobelFilter(fullImageData);
                         
-                        // 推奨値エリアのテキストを更新
+                        // 計算済みの線画をedgeCanvasに保存
+                        edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
+                        // ★ 変更点: fullEdgeResult.imageData -> fullEdgeResult.finalEdgeImageData
+                        edgeCanvas.getContext('2d').putImageData(fullEdgeResult.finalEdgeImageData, 0, 0);
+                        
+                        // 3. 推奨値エリアのテキストを更新
                         recTileSize.textContent = recommendations.tileSize;
                         recBrightness.textContent = recommendations.brightnessCompensation;
                         recTextureWeight.textContent = recommendations.textureWeight;
@@ -236,8 +262,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         
                         // エリアを表示
                         recommendationArea.style.display = 'block';
-                        
                         statusText.textContent = `ステータス: 推奨値を表示しました。適用ボタンを押すか、手動で設定してください。`;
+
                     } catch (err) {
                         console.error("Recommendation analysis failed:", err);
                         statusText.textContent = `ステータス: 画像ロード完了 (推奨値の計算に失敗)。`;
@@ -307,6 +333,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         progressBar.style.width = '0%';
         
         // ★ 変更点: imageDataはWorkerに渡すためだけに取得
+        // (線画の事前計算ロジックはここから削除)
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
