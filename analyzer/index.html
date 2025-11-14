@@ -21,20 +21,26 @@
         <h1 class="text-3xl font-bold text-gray-800 mb-4">タイル画像解析 ＆ サムネイル生成</h1>
         <p class="text-gray-600 mb-6">
             タイル画像をドラッグ＆ドロップすると、L*a*b*データ(JSON)と高速プレビュー用サムネイル(JPG)を解析・生成し、ZIPファイルとして一括ダウンロードします。
-        </p>
+        </A>
 
         <div id="drop-area" class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer transition-colors duration-200 hover:border-blue-500">
             <p class="text-gray-500">タイル画像 (JPG, PNG) をここにドラッグ＆ドロップ</p>
         </div>
 
         <!-- ★ 変更点: サムネイル設定UI -->
-        <div class="my-6 p-4 bg-gray-50 rounded-lg border">
-            <h3 class="text-lg font-semibold mb-2">サムネイル設定</h3>
-            <label for="thumbnail-quality" class="block text-sm font-medium text-gray-700">
-                サムネイル品質 (JPEG圧縮率): <span id="thumbnail-quality-value" class="font-bold">75</span>%
-            </label>
-            <input type="range" id="thumbnail-quality" min="10" max="100" value="75" class="w-full mt-1" oninput="document.getElementById('thumbnail-quality-value').textContent = this.value">
-            <p class="text-xs text-gray-500 mt-1">品質が低いほどファイルサイズは小さくなります。(固定サイズ: 100x100px)</p>
+        <div class="my-6 p-4 bg-gray-50 rounded-lg border grid grid-cols-2 gap-4">
+            <div>
+                <label for="thumbnail-quality" class="block text-sm font-medium text-gray-700">
+                    サムネイル品質 (JPEG圧縮率): <span id="thumbnail-quality-value" class="font-bold">75</span>%
+                </label>
+                <input type="range" id="thumbnail-quality" min="10" max="100" value="75" class="w-full mt-1" oninput="document.getElementById('thumbnail-quality-value').textContent = this.value">
+            </div>
+            <div>
+                <label for="thumbnail-size" class="block text-sm font-medium text-gray-700">
+                    サムネイル最大幅 (px): <span id="thumbnail-size-value" class="font-bold">320</span> px
+                </label>
+                <input type="range" id="thumbnail-size" min="50" max="640" value="320" step="10" class="w-full mt-1" oninput="document.getElementById('thumbnail-size-value').textContent = this.value">
+            </div>
         </div>
         <!-- ★ 変更点ここまで -->
 
@@ -42,7 +48,6 @@
             <button id="start-analysis" class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
                 解析開始
             </button>
-            <!-- ★ 変更点: JSONダウンロード -> ZIPダウンロード -->
             <button id="download-zip-button" class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
                 JSON と サムネイル (.zip) をダウンロード
             </button>
