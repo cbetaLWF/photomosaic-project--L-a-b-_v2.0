@@ -27,28 +27,49 @@ function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
+/**
+ * ★ 変更点: サムネイル（Blob）を生成するヘルパー関数
+ */
+async function createThumbnail(imageBitmap, crop, size, quality) {
+    const canvas = new OffscreenCanvas(size, size);
+    const ctx = canvas.getContext('2d');
+    
+    // 中央クロップ (cropC) と同じ正方形領域を描画
+    ctx.drawImage(imageBitmap, 
+        crop.x, crop.y, // ソース (元画像) のクロップ位置
+        crop.sSize, crop.sSize, // ソースのサイズ (正方形)
+        0, 0,           // 描画先 (Canvas) の位置
+        size, size      // 描画先のサイズ (サムネイルサイズ)
+    );
+
+    // Blob (JPEG) を非同期で生成
+    return await canvas.convertToBlob({
+        type: "image/jpeg",
+        quality: quality // 0.0 - 1.0
+    });
+}
+
+
 // 縦長/横長画像に対応したクロップと6パターン解析
-async function analyzeImagePatterns(file) {
-    const imageBitmap = await createImageBitmap(file);
+async function analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality) {
     const patterns = [];
+    const thumbnails = []; // ★ 変更点: サムネイルBlobを格納する配列
 
     const baseWidth = imageBitmap.width;
     const baseHeight = imageBitmap.height;
     
     // 1. クロップ設定 (短辺に合わせた正方形)
-    const size = Math.min(baseWidth, baseHeight);
-    const isHorizontal = baseWidth > baseHeight; // 横長画像か？
+    const sSize = Math.min(baseWidth, baseHeight); // ソースの正方形サイズ
+    const isHorizontal = baseWidth > baseHeight; 
 
     const cropSettings = isHorizontal ? [
-        // 横長画像の場合: Yは0固定、Xを動かす
-        { name: "cropL", x: 0, y: 0 },
-        { name: "cropC", x: Math.floor((baseWidth - size) / 2), y: 0 },
-        { name: "cropR", x: baseWidth - size, y: 0 }
+        { name: "cropL", x: 0, y: 0, sSize: sSize },
+        { name: "cropC", x: Math.floor((baseWidth - sSize) / 2), y: 0, sSize: sSize },
+        { name: "cropR", x: baseWidth - sSize, y: 0, sSize: sSize }
     ] : [
-        // 縦長画像の場合: Xは0固定、Yを動かす
-        { name: "cropT", x: 0, y: 0 }, // Top
-        { name: "cropM", x: 0, y: Math.floor((baseHeight - size) / 2) }, // Middle
-        { name: "cropB", x: 0, y: baseHeight - size } // Bottom
+        { name: "cropT", x: 0, y: 0, sSize: sSize }, 
+        { name: "cropM", x: 0, y: Math.floor((baseHeight - sSize) / 2), sSize: sSize },
+        { name: "cropB", x: 0, y: baseHeight - sSize, sSize: sSize }
     ];
 
     // 2. 反転設定
@@ -58,39 +79,45 @@ async function analyzeImagePatterns(file) {
     ];
 
     // 3x3 L*ベクトル計算用の境界 (正方形なので共通)
-    const oneThird = Math.floor(size / 3);
-    const twoThirds = Math.floor(size * 2 / 3);
+    const oneThird = Math.floor(sSize / 3);
+    const twoThirds = Math.floor(sSize * 2 / 3);
     
-    // 一時描画用のOffscreenCanvas
-    const canvas = new OffscreenCanvas(size, size);
-    const ctx = canvas.getContext('2d');
+    // 一時描画用のOffscreenCanvas (L*ベクトル解析用)
+    const analysisCanvas = new OffscreenCanvas(sSize, sSize);
+    const ctx = analysisCanvas.getContext('2d');
+
+    // ★ 変更点: サムネイルは「中央クロップ」のみを生成する
+    const centralCrop = cropSettings[1]; // cropC または cropM
+    const thumbnailBlob = await createThumbnail(imageBitmap, centralCrop, thumbnailSize, thumbnailQuality);
+    thumbnails.push(thumbnailBlob); // 1枚だけ生成
+
 
     // --- 3 (クロップ) x 2 (反転) = 6 パターンのループ ---
     for (const crop of cropSettings) {
         for (const flip of flipSettings) {
             
             // --- 描画フェーズ ---
-            ctx.clearRect(0, 0, size, size);
+            ctx.clearRect(0, 0, sSize, sSize);
             if (flip.flip) {
                 ctx.save();
                 ctx.scale(-1, 1); // 左右反転
-                ctx.drawImage(imageBitmap, crop.x, crop.y, size, size, -size, 0, size, size);
+                ctx.drawImage(imageBitmap, crop.x, crop.y, sSize, sSize, -sSize, 0, sSize, sSize);
                 ctx.restore();
             } else {
-                ctx.drawImage(imageBitmap, crop.x, crop.y, size, size, 0, 0, size, size);
+                ctx.drawImage(imageBitmap, crop.x, crop.y, sSize, sSize, 0, 0, sSize, sSize);
             }
             
             // --- 解析フェーズ ---
-            const imageData = ctx.getImageData(0, 0, size, size);
+            const imageData = ctx.getImageData(0, 0, sSize, sSize);
             // ( ... 3x3 L*ベクトル計算 ... )
             const data = imageData.data;
             const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             const pixelCountTotal = data.length / 4;
-            for (let y = 0; y < size; y++) {
+            for (let y = 0; y < sSize; y++) {
                 const row = (y < oneThird) ? 0 : (y < twoThirds ? 1 : 2);
-                for (let x = 0; x < size; x++) {
-                    const idx = (y * size + x) * 4;
+                for (let x = 0; x < sSize; x++) {
+                    const idx = (y * sSize + x) * 4;
                     const r = data[idx], g = data[idx+1], b = data[idx+2];
                     r_sum_total += r; g_sum_total += g; b_sum_total += b;
                     const col = (x < oneThird) ? 0 : (x < twoThirds ? 1 : 2);
@@ -109,20 +136,26 @@ async function analyzeImagePatterns(file) {
             });
 
             patterns.push({
-                type: `${crop.name}_${flip.name}`, // "cropC_flip1" や "cropM_flip0" など
+                type: `${crop.name}_${flip.name}`, 
                 l: lab.l, a: lab.a, b_star: lab.b_star,
                 l_vector: l_vector
             });
         }
     }
-    return patterns;
+    // ★ 変更点: L*パターン(6種)と、サムネイルBlob(1枚)を返す
+    return { patterns, thumbnails }; 
 }
 
 
 // Workerで受け取った画像データ配列を処理
 self.onmessage = async (e) => {
-    const { files } = e.data;
-    const results = [];
+    // ★ 変更点: サムネイル設定を受け取る
+    const { files, thumbnailQuality, thumbnailSize } = e.data;
+    
+    // ★ 変更点: 最終結果をJSON用とサムネイル用に分ける
+    const jsonResults = [];
+    const thumbnailResults = [];
+    
     const totalFiles = files.length;
 
     for (let i = 0; i < totalFiles; i++) {
@@ -130,18 +163,28 @@ self.onmessage = async (e) => {
         if (!file.type.startsWith('image/')) continue;
 
         try {
-            const patterns = await analyzeImagePatterns(file);
+            const imageBitmap = await createImageBitmap(file);
+            
+            // ★ 変更点: 6パターンとサムネイル1枚を生成
+            const { patterns, thumbnails } = await analyzeImagePatterns(imageBitmap, thumbnailSize, thumbnailQuality);
 
-            // ★ 変更点: サムネイルURLを生成
+            // 1. JSON用データ
             const originalUrl = `tiles/${file.name}`;
             const thumbUrl = originalUrl.replace('tiles/', 'tiles_thumb/');
-
-            // 結果を格納 (新しいJSON構造)
-            results.push({
+            jsonResults.push({
                 url: originalUrl, 
-                thumb_url: thumbUrl, // ★ サムネイルURLを追加
+                thumb_url: thumbUrl,
                 patterns: patterns 
             });
+            
+            // 2. サムネイルBlobデータ (ZIP用)
+            // (thumbnails[0] が中央クロップのBlob)
+            if (thumbnails.length > 0) {
+                thumbnailResults.push({
+                    path: file.name, // ZIP内のパス (例: image001.jpg)
+                    blob: thumbnails[0]
+                });
+            }
             
             self.postMessage({ type: 'progress', progress: (i + 1) / totalFiles, fileName: file.name });
 
@@ -150,5 +193,12 @@ self.onmessage = async (e) => {
         }
     }
 
-    self.postMessage({ type: 'complete', results: results });
+    // ★ 変更点: JSONとサムネイルBlobの両方をメインスレッドに渡す
+    self.postMessage({ 
+        type: 'complete', 
+        results: {
+            json: jsonResults,
+            thumbnails: thumbnailResults
+        } 
+    });
 };
