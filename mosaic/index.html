@@ -15,7 +15,7 @@
         #controls button:disabled { background-color: #93c5fd; cursor: not-allowed; }
         #controls button:hover:enabled { background-color: #2563eb; }
         
-        /* 推奨値エリアのスタイル */
+        /* ( ... 推奨値エリアのスタイル ... ) */
         #recommendation-area {
             display: none; /* JSで表示 */
             background-color: #fefce8; /* 黄色っぽい背景 */
@@ -71,7 +71,7 @@
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
         }
         
-        /* ダウンロード警告エリア */
+        /* ( ... ダウンロード警告エリアのスタイル ... ) */
         #download-warning-area {
             display: none; /* JSで表示 */
             background-color: #fffbeb; /* light-yellow-100 */
@@ -105,6 +105,18 @@
             border-radius: 6px;
             cursor: pointer;
         }
+
+        /* ★ 変更点: 速度計測ログのスタイル */
+        #timing-log {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9em;
+            color: #4b5563; /* gray-600 */
+            background-color: #f3f4f6; /* gray-100 */
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 20px;
+            white-space: pre-wrap;
+        }
         
     </style>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -114,11 +126,10 @@
         <h1 class="text-3xl">フォトモザイク生成 (Mosaic App)</h1>
         
         <div id="controls">
-            <!-- ステップ1: アップロード & 推奨値 -->
+            <!-- ( ... ステップ1: アップロード & 推奨値 ... ) -->
             <div class="control-group">
                 <label for="main-image-input">ステップ1: メイン画像をアップロード</label>
                 <input type="file" id="main-image-input" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
-                
                 <div id="recommendation-area">
                     <h3><span class="text-yellow-600">💡</span> 画像の推奨パラメータ</h3>
                     <div id="recommendation-values">
@@ -132,11 +143,9 @@
                 </div>
             </div>
 
-            <!-- ステップ2: パラメータ設定 -->
+            <!-- ( ... ステップ2: パラメータ設定 ... ) -->
             <div class="control-group">
                 <label>ステップ2: パラメータ設定 (推奨値から調整可)</label>
-                
-                <!-- ★ 修正: 5つのスライダーをすべて含める -->
                 <div class="grid md:grid-cols-3 gap-4 mt-2">
                     <div>
                         <label for="tile-size">タイル幅 (px):</label>
@@ -164,11 +173,9 @@
                         <p class="text-xs text-gray-500 mt-1">元画像の輪郭(Multiply)を重ねます。</p>
                     </div>
                 </div>
-                <!-- ★ 修正ここまで -->
-                
             </div>
             
-            <!-- ステップ3: ダウンロード設定 -->
+            <!-- ( ... ステップ3: ダウンロード設定 ... ) -->
             <div class="control-group">
                 <label>ステップ3: ダウンロード設定</label>
                 <div class="grid md:grid-cols-2 gap-4 mt-2">
@@ -185,14 +192,7 @@
                 </div>
             </div>
 
-            <!-- 高速プレビューモード -->
-            <div class="control-group flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                    <input type="checkbox" id="preview-mode-checkbox" checked class="h-5 w-5 rounded text-indigo-600 focus:ring-indigo-500">
-                    <label for="preview-mode-checkbox" class="mb-0 font-medium">高速プレビューモード</label>
-                </div>
-                <p class="text-xs text-gray-500 mt-0">（サムネイル画像で描画を高速化）</p>
-            </div>
+            <!-- ★ 変更点: 高速プレビューモードを削除 (常にフル解像度ロード) -->
             
             <button id="generate-button" disabled>ステップ4: モザイク生成 (プレビュー)</button>
         </div>
@@ -204,7 +204,7 @@
 
         <canvas id="main-canvas"></canvas>
         
-        <!-- ダウンロードボタンと警告エリア -->
+        <!-- ( ... ダウンロードボタンと警告エリア ... ) -->
         <button id="download-button" style="display: none;" class="w-full p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-md transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
             <span id="download-spinner" class="hidden">🔄</span>
             結果をダウンロード (高画質 JPEG)
@@ -216,6 +216,12 @@
                 <button id="warning-no-button">キャンセル (No)</button>
             </div>
         </div>
+
+        <!-- ★ 変更点: 速度計測ログ用の表示エリア -->
+        <div id="timing-log">
+            処理時間 (テスト用):
+        </div>
+        <!-- ★ 変更点ここまで -->
     </div>
 
     <!-- JavaScript Files -->
