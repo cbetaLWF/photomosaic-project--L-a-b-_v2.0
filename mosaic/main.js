@@ -63,6 +63,69 @@ function applySobelFilter(imageData) {
 // ★ ヘルパー関数ここまで
 
 
+// ★ 変更点: 画像を分析し、推奨値を返すヘルパー関数
+function analyzeImageAndGetRecommendations(image) {
+    const width = image.width;
+    const height = image.height;
+
+    // 1. 画像からピクセルデータを取得 (縮小して高速化)
+    const analysisSize = 400; // 400x400程度に縮小して分析
+    const ratio = analysisSize / Math.max(width, height);
+    const w = width * ratio;
+    const h = height * ratio;
+    
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0, w, h);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const data = imageData.data;
+    
+    // 2. 平均輝度(Luma)と標準偏差(コントラスト)を計算
+    let sumLuma = 0;
+    let sumLumaSq = 0;
+    const lumaValues = [];
+    
+    for (let i = 0; i < data.length; i += 4) {
+        const luma = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
+        sumLuma += luma;
+        lumaValues.push(luma);
+    }
+    
+    const pixelCount = data.length / 4;
+    const meanLuma = sumLuma / pixelCount; // 平均輝度 (0-255)
+    
+    for (const luma of lumaValues) {
+        sumLumaSq += (luma - meanLuma) * (luma - meanLuma);
+    }
+    const stdDev = Math.sqrt(sumLumaSq / pixelCount); // 標準偏差 (コントラストの目安)
+    
+    // 3. 推奨値を決定
+    const recommendations = {};
+
+    // タイル幅: 解像度が高いほど細かく
+    if (width > 3000) recommendations.tileSize = 15;
+    else if (width > 1500) recommendations.tileSize = 25;
+    else recommendations.tileSize = 30;
+
+    // L*明度補正: 常に100
+    recommendations.brightnessCompensation = 100;
+    
+    // テクスチャ重視度: コントラストが高いほど重視
+    // stdDev (0-128, typical 30-60)
+    recommendations.textureWeight = Math.round(Math.min(200, stdDev * 1.5 + 20)); // 30->65, 60->110
+
+    // ブレンド度(陰影): 暗い画像ほど弱く
+    // meanLuma (0-255, typical 80-150)
+    recommendations.blendRange = Math.round(Math.max(10, meanLuma / 7.0)); // 80->11, 150->21
+
+    // 線画の強さ: コントラストが低いほど強く (アニメ塗り補完)
+    recommendations.edgeOpacity = Math.round(Math.max(10, 70 - stdDev)); // 30->40, 60->10
+    
+    return recommendations;
+}
+// ★ ヘルパー関数ここまで
+
+
 document.addEventListener('DOMContentLoaded', async () => {
     // UI要素の取得
     const mainImageInput = document.getElementById('main-image-input');
@@ -167,7 +230,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                     mainCanvas.height = mainImage.height;
                     ctx.clearRect(0, 0, mainImage.width, mainImage.height);
                     ctx.drawImage(mainImage, 0, 0); // プレビュー表示
-                    statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
+                    statusText.textContent = `ステータス: 画像ロード完了。推奨値を計算中...`;
+
+                    // ここで推奨値を計算・適用
+                    try {
+                        const rec = analyzeImageAndGetRecommendations(mainImage);
+                        
+                        tileSizeInput.value = rec.tileSize;
+                        
+                        brightnessCompensationInput.value = rec.brightnessCompensation;
+                        brightnessCompensationValue.textContent = rec.brightnessCompensation;
+                        
+                        textureWeightInput.value = rec.textureWeight;
+                        textureWeightValue.textContent = rec.textureWeight;
+                        
+                        blendRangeInput.value = rec.blendRange;
+                        blendValue.textContent = rec.blendRange;
+                        
+                        edgeOpacityInput.value = rec.edgeOpacity;
+                        edgeOpacityValue.textContent = rec.edgeOpacity;
+
+                        statusText.textContent = `ステータス: 推奨値を自動設定しました。生成ボタンを押してください。`;
+                    } catch (err) {
+                        console.error("Recommendation analysis failed:", err);
+                        statusText.textContent = `ステータス: 画像ロード完了 (推奨値の計算に失敗)。`;
+                    }
                 };
                 mainImage.src = event.target.result;
             };
@@ -375,7 +462,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         progressBar.style.width = '100%';
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
 
-        // --- ★ 変更点: 2段階のブレンド処理 ---
+        // --- 2段階のブレンド処理 ---
 
         // 1. 「陰影」ブレンド (Soft Light)
         if (blendOpacity > 0) {
@@ -395,7 +482,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 3. 設定を元に戻す
         ctx.globalCompositeOperation = 'source-over'; 
         ctx.globalAlpha = 1.0; 
-        // ★ 変更点ここまで
 
         statusText.textContent = 'ステータス: モザイクアートが完成しました！';
         generateButton.disabled = false;
