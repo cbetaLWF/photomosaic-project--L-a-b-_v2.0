@@ -185,26 +185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (blendRangeInput && blendValue) { /* ... */ }
     if (edgeOpacityInput && edgeOpacityValue) { /* ... */ }
 
-    // ★ 修正点: 問題③対応 - キャッシュクリアリスナーの実装
-    const cacheClearer = () => {
-        if (cachedResults) {
-            statusText.textContent = 'ステータス: タイルサイズまたはテクスチャ設定が変更されました。再計算が必要です。';
-            cachedResults = null;
-            lastHeavyParams = {};
-            generateButton.disabled = false;
-            if(downloadButton) downloadButton.style.display = 'none';
-        }
-    };
-    
-    // changeイベントに加え、即座に反応するinputイベントも追加
-    if (tileSizeInput) {
-        tileSizeInput.addEventListener('change', cacheClearer);
-        tileSizeInput.addEventListener('input', cacheClearer); 
-    }
-    if (textureWeightInput) {
-        textureWeightInput.addEventListener('change', cacheClearer);
-        textureWeightInput.addEventListener('input', cacheClearer); 
-    }
+    // ★ 修正点: 問題③対策 - inputイベントでのキャッシュクリアは不要になり、ロジックを削除
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -321,7 +302,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             statusText.textContent = 'ステータス: 推奨パラメータを適用しました。';
-            // ヘビーパラメータ（タイルサイズ、テクスチャ）が変わった可能性があるのでキャッシュをクリア
+            // ヘビーパラメータが変更されたため、強制的にキャッシュをクリアする
             cachedResults = null;
             lastHeavyParams = {};
             generateButton.disabled = false;
@@ -358,8 +339,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const isPreview = previewModeCheckbox.checked; 
 
+        // ★ 修正点: 問題③対策 - タイルサイズが変更されたかを明示的にチェック
+        const isTileSizeChanged = lastHeavyParams.tileSize !== currentHeavyParams.tileSize;
+        
         // 3. キャッシュのチェック
-        if (cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
+        // タイルサイズが変わっておらず、かつ、キャッシュが存在し、その他HeavyParamsが変わっていない場合のみ高速再描画
+        if (!isTileSizeChanged && cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
             
             // --- Case 1: 高速再描画 (Worker処理をスキップ) ---
             statusText.textContent = 'ステータス: 描画パラメータのみ変更... 高速に再描画します。';
@@ -387,6 +372,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         // --- Case 2: 通常処理 (Worker処理を実行) ---
+        // タイルサイズが変わった場合、またはその他のHeavyParamsが変わった場合は、再計算
         cachedResults = null; 
         lastHeavyParams = currentHeavyParams; 
         statusText.textContent = 'ステータス: タイル配置を計算中...';
