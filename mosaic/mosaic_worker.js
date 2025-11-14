@@ -1,4 +1,34 @@
-// ... (L*a*b*関数などは変更なし) ...
+// L*a*b*変換のための定数とヘルパー関数
+const REF_X = 95.047; // D65
+const REF_Y = 100.000;
+const REF_Z = 108.883;
+
+// ★ 修正点: 欠落していた f(t) 関数を追加
+// これがクラッシュの根本原因です
+function f(t) {
+    return t > 0.008856 ? Math.pow(t, 1/3) : (7.787 * t) + (16 / 116);
+}
+
+function rgbToLab(r, g, b) {
+    // 1. RGB to XYZ
+    r /= 255; g /= 255; b /= 255;
+    r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+    g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+    b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+    let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) * 100;
+    let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 100;
+    let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) * 100;
+    // 2. XYZ to L*a*b*
+    let fx = f(x / REF_X); let fy = f(y / REF_Y); let fz = f(z / REF_Z);
+    let l = (116 * fy) - 16; let a = 500 * (fx - fy); let b_star = 200 * (fy - fz);
+    l = Math.max(0, Math.min(100, l));
+    return { l: l, a: a, b_star: b_star };
+}
+
+// 平均RGBからL*値のみを返す簡易ヘルパー
+function getLstar(r, g, b) {
+    return rgbToLab(r, g, b).l;
+}
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
@@ -105,7 +135,11 @@ self.onmessage = async (e) => {
 
                     // --- 3. 最終距離(totalDistance)の計算 ---
                     let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
-                    const count = usageCount.get(pattern.l_vector) || 0; 
+
+                    // --- 4. 公平性ペナルティ ---
+                    // ★ 修正点: 配列(l_vector)はそのままMapキーにできないため、文字列に変換
+                    const patternKey = pattern.l_vector.toString(); 
+                    const count = usageCount.get(patternKey) || 0; 
                     const fairnessPenalty = count * 0.5; 
                     totalDistance += fairnessPenalty; 
 
@@ -124,12 +158,13 @@ self.onmessage = async (e) => {
                     patternType: bestMatch.type, // どの拡張パターンが選ばれたか
                     x: x,
                     y: y,
-                    width: tileWidth, // ★ 変更点: currentSize -> tileWidth
-                    height: tileHeight, // ★ 変更点: currentSize -> tileHeight
+                    width: tileWidth, // フルサイズ
+                    height: tileHeight, // フルサイズ
                     targetL: targetLab.l, // ブロックのL*値
                     tileL: bestMatch.l // 選ばれた「パターン」のL*値
                 });
-                usageCount.set(bestMatch.l_vector, (usageCount.get(bestMatch.l_vector) || 0) + 1);
+                // ★ 修正点: 文字列キーで保存
+                usageCount.set(bestMatch.l_vector.toString(), (usageCount.get(bestMatch.l_vector.toString()) || 0) + 1);
             }
         } // xループの終わり
 
