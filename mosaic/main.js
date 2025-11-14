@@ -171,12 +171,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 ---
-    // (★ 変更点: 縦長クロップ描画対応)
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
         mainCanvas.height = height;
         ctx.clearRect(0, 0, width, height);
+
+        // ★ 変更点: ここからクリッピング設定
+        ctx.save(); // 現在の描画状態を保存
+        ctx.beginPath();
+        ctx.rect(0, 0, width, height); // Canvasの境界(0,0,width,height)で矩形パスを作成
+        ctx.clip(); // このパスの内側だけを描画領域にする
+        // ★ 変更点: ここまでクリッピング設定
 
         let loadedCount = 0;
         const totalTiles = results.length;
@@ -202,67 +208,50 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
 
-                    // ★★★ ここからが変更点 ★★★
-
-                    // 1. ソース画像のサイズ
+                    // ( ... 縦長/横長クロップ＆反転描画ロジック ... )
                     const sWidth = img.naturalWidth;
                     const sHeight = img.naturalHeight;
-                    
-                    // 2. Analyzerがクロップした正方形のサイズ
                     const sSize = Math.min(sWidth, sHeight);
-                    const isHorizontal = sWidth > sHeight; // ソース画像が横長か？
-
-                    // 3. 'tile.patternType' (e.g., "cropC_flip1" or "cropM_flip0") をパース
+                    const isHorizontal = sWidth > sHeight; 
                     const typeParts = tile.patternType.split('_'); 
-                    const cropType = typeParts[0]; // "cropL", "cropC", "cropR", "cropT", "cropM", "cropB"
-                    const flipType = typeParts[1]; // "flip0", "flip1"
-
-                    // 4. クロップタイプに応じて、ソース矩形(sx, sy)を決定
+                    const cropType = typeParts[0]; 
+                    const flipType = typeParts[1]; 
                     let sx = 0;
                     let sy = 0;
                     if (isHorizontal) {
-                        // 横長画像の場合 (Yは0固定、Xを動かす)
                         if (cropType === "cropC") {
                             sx = Math.floor((sWidth - sSize) / 2);
                         } else if (cropType === "cropR") {
                             sx = sWidth - sSize;
                         }
                     } else {
-                        // 縦長画像の場合 (Xは0固定、Yを動かす)
                         if (cropType === "cropM") {
                             sy = Math.floor((sHeight - sSize) / 2);
                         } else if (cropType === "cropB") {
                             sy = sHeight - sSize;
                         }
                     }
-                    // "cropL" または "cropT" は (0, 0) のまま
-
-                    // 5. 描画先の矩形（Canvas上の位置と、正方形のサイズ）
+                    // ★ 変更点: dWidth/dHeight は worker からのフルサイズ (tileWidth/tileHeight)
                     const dx = tile.x;
                     const dy = tile.y;
-                    const dWidth = tile.width; // worker から正方形の幅が来る
-                    const dHeight = tile.height; // worker から正方形の高さが来る
+                    const dWidth = tile.width; 
+                    const dHeight = tile.height; 
 
-                    // 6. 反転(flip)処理と描画
                     ctx.save();
                     if (flipType === "flip1") {
-                        // 水平反転
                         ctx.scale(-1, 1);
                         ctx.drawImage(img, 
-                            sx, sy, sSize, sSize, // ソース矩形 (正方形)
-                            -dx - dWidth, dy, dWidth, dHeight // 描画先矩形 (反転)
+                            sx, sy, sSize, sSize, 
+                            -dx - dWidth, dy, dWidth, dHeight 
                         );
                     } else {
-                        // 通常描画
                         ctx.drawImage(img, 
-                            sx, sy, sSize, sSize, // ソース矩形 (正方形)
-                            dx, dy, dWidth, dHeight // 描画先矩形 (通常)
+                            sx, sy, sSize, sSize, 
+                            dx, dy, dWidth, dHeight 
                         );
                     }
                     ctx.restore();
                     
-                    // ★★★ ここまでが変更点 ★★★
-
                     ctx.filter = 'none';
                     loadedCount++;
                     resolve();
@@ -282,6 +271,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         await Promise.all(promises);
         
+        // ★ 変更点: クリッピングを解除
+        ctx.restore(); // save() した時点の状態（クリッピングなし）に戻す
+
         progressBar.style.width = '100%';
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
 
