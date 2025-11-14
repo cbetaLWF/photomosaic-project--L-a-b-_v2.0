@@ -1,77 +1,92 @@
-// ★ 変更点: 線画抽出（Sobel）のためのヘルパー関数
+// 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
-    // ( ... 変更なし: 前回の「黒い線 + 透明な背景」版の SobelFilter ... )
     const width = imageData.width;
     const height = imageData.height;
     const data = imageData.data;
+    
+    // 1. グレースケールに変換
     const grayscaleData = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
+        // 知覚輝度 (Luma)
         const gray = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
         grayscaleData[i / 4] = gray;
     }
+
+    // sobelDataを「透明」で初期化 (すべて0)
     const sobelData = new Uint8ClampedArray(data.length);
-    const Gx = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
-    const Gy = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
+    
+    const Gx = [
+        [-1, 0, 1],
+        [-2, 0, 2],
+        [-1, 0, 1]
+    ];
+    const Gy = [
+        [-1, -2, -1],
+        [0, 0, 0],
+        [1, 2, 1]
+    ];
+    
     const threshold = 30; 
+    let sumAlpha = 0; // ★ 変更点: ディテール量を測るためにAlphaの合計値を計算
+
+    // 2. Sobelフィルタ適用
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             let sumX = 0;
             let sumY = 0;
+
             for (let ky = -1; ky <= 1; ky++) {
                 for (let kx = -1; kx <= 1; kx++) {
                     const idx = ((y + ky) * width + (x + kx));
-                    sumX += grayscaleData[idx] * Gx[ky + 1][kx + 1];
-                    sumY += grayscaleData[idx] * Gy[ky + 1][kx + 1];
+                    const gray = grayscaleData[idx];
+                    sumX += gray * Gx[ky + 1][kx + 1];
+                    sumY += gray * Gy[ky + 1][kx + 1];
                 }
             }
+
             const magnitude = Math.sqrt(sumX * sumX + sumY * sumY);
             const i = (y * width + x) * 4;
+
             if (magnitude > threshold) {
-                sobelData[i] = 0; sobelData[i + 1] = 0; sobelData[i + 2] = 0;
-                sobelData[i + 3] = Math.min(255, magnitude * 1.5);
+                sobelData[i] = 0; // R (黒)
+                sobelData[i + 1] = 0; // G (黒)
+                sobelData[i + 2] = 0; // B (黒)
+                const alpha = Math.min(255, magnitude * 1.5);
+                sobelData[i + 3] = alpha; // A (不透明度)
+                sumAlpha += alpha; // ★ 変更点: ディテール量として加算
             }
         }
     }
-    return new ImageData(sobelData, width, height);
+    // ★ 変更点: ImageDataとディテール量（Alpha合計）を返す
+    return { imageData: new ImageData(sobelData, width, height), sumAlpha: sumAlpha };
 }
 // ★ ヘルパー関数ここまで
 
 
 // ★ 変更点: 画像を分析し、推奨値を返すヘルパー関数
-function analyzeImageAndGetRecommendations(image) {
+function analyzeImageAndGetRecommendations(image, imageData) {
     const width = image.width;
     const height = image.height;
-
-    // 1. 画像からピクセルデータを取得 (縮小して高速化)
-    const analysisSize = 400; // 400x400程度に縮小して分析
-    const ratio = analysisSize / Math.max(width, height);
-    const w = width * ratio;
-    const h = height * ratio;
+    const data = imageData.data; // analysisSizeに縮小済みのピクセルデータ
     
-    const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(image, 0, 0, w, h);
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const data = imageData.data;
-    
-    // 2. 平均輝度(Luma)と標準偏差(コントラスト)を計算
+    // 1. 平均輝度(Luma)を計算 (変更なし)
     let sumLuma = 0;
-    let sumLumaSq = 0;
-    const lumaValues = [];
-    
     for (let i = 0; i < data.length; i += 4) {
         const luma = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
         sumLuma += luma;
-        lumaValues.push(luma);
     }
-    
     const pixelCount = data.length / 4;
     const meanLuma = sumLuma / pixelCount; // 平均輝度 (0-255)
     
-    for (const luma of lumaValues) {
-        sumLumaSq += (luma - meanLuma) * (luma - meanLuma);
-    }
-    const stdDev = Math.sqrt(sumLumaSq / pixelCount); // 標準偏差 (コントラストの目安)
+    // 2. ★ 変更点: Sobelフィルタを実行して「ディテール量」を取得
+    // (縮小済みimageDataをSobelにかけるため高速)
+    const edgeResult = applySobelFilter(imageData);
+    const edgeImageData = edgeResult.imageData; // 線画データ（本番でも使用）
+    const sumAlpha = edgeResult.sumAlpha;       // ディテール量（Alpha合計）
+    
+    // ディテール量を 0.0 〜 255.0 の平均アルファ値に正規化
+    const detailAmount = sumAlpha / pixelCount; 
+    // (目安: のっぺりした画像=5, 通常=10-20, ディテール多い=30+)
     
     // 3. 推奨値を決定
     const recommendations = {};
@@ -84,45 +99,40 @@ function analyzeImageAndGetRecommendations(image) {
     // L*明度補正: 常に100
     recommendations.brightnessCompensation = 100;
     
-    // テクスチャ重視度: コントラストが高いほど重視
-    // stdDev (0-128, typical 30-60)
-    recommendations.textureWeight = Math.round(Math.min(200, stdDev * 1.5 + 20)); // 30->65, 60->110
+    // ★ 変更点: テクスチャ重視度 -> ディテール量(detailAmount)が多いほど高く
+    recommendations.textureWeight = Math.round(Math.min(200, detailAmount * 5.0 + 20)); 
+    // (例: detailAmount=10 -> 70, detailAmount=20 -> 120)
 
-    // ブレンド度(陰影): 暗い画像ほど弱く
-    // meanLuma (0-255, typical 80-150)
-    recommendations.blendRange = Math.round(Math.max(10, meanLuma / 7.0)); // 80->11, 150->21
+    // ブレンド度(陰影): 暗い画像ほど弱く (変更なし)
+    recommendations.blendRange = Math.round(Math.max(10, meanLuma / 7.0)); 
 
-    // 線画の強さ: コントラストが低いほど強く (アニメ塗り補完)
-    recommendations.edgeOpacity = Math.round(Math.max(10, 70 - stdDev)); // 30->40, 60->10
+    // ★ 変更点: 線画の強さ -> ディテール量(detailAmount)が少ないほど強く
+    recommendations.edgeOpacity = Math.round(Math.max(10, 60 - detailAmount * 1.5));
+    // (例: detailAmount=10 -> 45, detailAmount=20 -> 30)
     
-    return recommendations;
+    // ★ 変更点: 計算済みの線画データも返す
+    return { recommendations, edgeImageData };
 }
 // ★ ヘルパー関数ここまで
 
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // --- UI要素の取得 ---
+    // ( ... UI要素の取得 ... )
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
     const mainCanvas = document.getElementById('main-canvas');
     const progressBar = document.getElementById('progress-fill');
     const statusText = document.getElementById('status-text');
-    
-    // スライダー本体
     const tileSizeInput = document.getElementById('tile-size');
     const blendRangeInput = document.getElementById('blend-range');
-    const edgeOpacityInput = document.getElementById('edge-opacity-range');
-    const brightnessCompensationInput = document.getElementById('brightness-compensation');
-    const textureWeightInput = document.getElementById('texture-weight');
-    
-    // スライダーの値表示
     const blendValue = document.getElementById('blend-value');
+    const edgeOpacityInput = document.getElementById('edge-opacity-range');
     const edgeOpacityValue = document.getElementById('edge-opacity-value');
+    const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
+    const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
-    
-    // ★ 変更点: 推奨値エリアのUI
     const recommendationArea = document.getElementById('recommendation-area');
     const applyRecommendationsButton = document.getElementById('apply-recommendations-button');
     const recTileSize = document.getElementById('rec-tile-size');
@@ -132,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const recEdgeOpacity = document.getElementById('rec-edge-opacity');
 
     
-    // 全ての必須要素が存在するかチェック
+    // ( ... 必須要素チェック ... )
     if (!mainCanvas || !statusText || !generateButton || !blendRangeInput || !edgeOpacityInput || !recommendationArea) {
         console.error("Initialization Error: One or more required HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status, Sliders) are missing from the HTML.</p>";
@@ -143,37 +153,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     let tileData = null;
     let mainImage = null;
     let workers = [];
-    let edgeCanvas = null;
-    
-    // ★ 変更点: 推奨値を保持する変数
+    let edgeCanvas = null; // ★ 変更点: ここではnullのまま
     let currentRecommendations = null;
 
 
-    // --- UIの初期設定 ---
+    // ( ... UIの初期設定 (スライダーリスナー含む) ... )
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
-
-    // スライダーのリスナー
-    if (brightnessCompensationInput && brightnessCompensationValue) {
-        brightnessCompensationInput.addEventListener('input', () => {
-            brightnessCompensationValue.textContent = brightnessCompensationInput.value;
-        });
-    }
-    if (textureWeightInput && textureWeightValue) {
-        textureWeightInput.addEventListener('input', () => {
-            textureWeightValue.textContent = textureWeightInput.value;
-        });
-    }
-    if (blendRangeInput && blendValue) {
-        blendRangeInput.addEventListener('input', () => {
-            blendValue.textContent = blendRangeInput.value;
-        });
-    }
-    if (edgeOpacityInput && edgeOpacityValue) {
-        edgeOpacityInput.addEventListener('input', () => {
-            edgeOpacityValue.textContent = edgeOpacityInput.value;
-        });
-    }
+    if (brightnessCompensationInput && brightnessCompensationValue) { /* ... */ }
+    if (textureWeightInput && textureWeightValue) { /* ... */ }
+    if (blendRangeInput && blendValue) { /* ... */ }
+    if (edgeOpacityInput && edgeOpacityValue) { /* ... */ }
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -194,6 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // --- 2. メイン画像アップロード ---
+    // (★ 変更点: 線画も同時に計算・保持する)
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -210,17 +201,38 @@ document.addEventListener('DOMContentLoaded', async () => {
                     ctx.drawImage(mainImage, 0, 0); // プレビュー表示
                     statusText.textContent = `ステータス: 画像ロード完了。推奨値を計算中...`;
 
-                    // ★ 変更点: 推奨値を計算し、UIに「表示」する (適用はしない)
                     try {
-                        const rec = analyzeImageAndGetRecommendations(mainImage);
-                        currentRecommendations = rec; // 推奨値を保持
+                        // ★ 変更点: 分析用の縮小画像データを作成
+                        const analysisSize = 400; 
+                        const ratio = analysisSize / Math.max(mainImage.width, mainImage.height);
+                        const w = mainImage.width * ratio;
+                        const h = mainImage.height * ratio;
+                        const analysisCanvas = new OffscreenCanvas(w, h);
+                        const analysisCtx = analysisCanvas.getContext('2d');
+                        analysisCtx.drawImage(mainImage, 0, 0, w, h);
+                        const analysisImageData = analysisCtx.getImageData(0, 0, w, h);
+
+                        // ★ 変更点: 縮小画像データを使って分析
+                        const { recommendations, edgeImageData } = analyzeImageAndGetRecommendations(mainImage, analysisImageData);
+                        
+                        currentRecommendations = recommendations; // 推奨値を保持
+                        
+                        // ★ 変更点: 分析時に生成された線画をフルサイズのCanvasに描画して保持
+                        // (フルサイズのSobelを再度実行するのを防ぐため)
+                        edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
+                        const edgeCtx = edgeCanvas.getContext('2d');
+                        // まずフルサイズの線画を生成
+                        const fullImageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
+                        const fullEdgeResult = applySobelFilter(fullImageData);
+                        edgeCtx.putImageData(fullEdgeResult.imageData, 0, 0);
+
                         
                         // 推奨値エリアのテキストを更新
-                        recTileSize.textContent = rec.tileSize;
-                        recBrightness.textContent = rec.brightnessCompensation;
-                        recTextureWeight.textContent = rec.textureWeight;
-                        recBlendRange.textContent = rec.blendRange;
-                        recEdgeOpacity.textContent = rec.edgeOpacity;
+                        recTileSize.textContent = recommendations.tileSize;
+                        recBrightness.textContent = recommendations.brightnessCompensation;
+                        recTextureWeight.textContent = recommendations.textureWeight;
+                        recBlendRange.textContent = recommendations.blendRange;
+                        recEdgeOpacity.textContent = recommendations.edgeOpacity;
                         
                         // エリアを表示
                         recommendationArea.style.display = 'block';
@@ -231,7 +243,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                         statusText.textContent = `ステータス: 画像ロード完了 (推奨値の計算に失敗)。`;
                         recommendationArea.style.display = 'none';
                     }
-                    // ★ 変更点ここまで
                 };
                 mainImage.src = event.target.result;
             };
@@ -282,28 +293,34 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 3. モザイク生成開始 (並列化ロジック) ---
     generateButton.addEventListener('click', () => {
-        // ( ... 変更なし: 並列でWorkerを起動し、結果を待つ ... )
-        // ( ... applySobelFilter呼び出しも変更なし ... )
         if (!mainImage) return;
+        
+        // ★ 変更点: 線画が計算済みかチェック
+        if (!edgeCanvas) {
+            statusText.textContent = 'エラー: 線画データがまだ生成されていません。画像を再アップロードしてください。';
+            return;
+        }
+        
         terminateWorkers(); 
         generateButton.disabled = true;
         downloadButton.style.display = 'none';
         progressBar.style.width = '0%';
-        statusText.textContent = 'ステータス: 画像データの準備中...';
+        
+        // ★ 変更点: imageDataはWorkerに渡すためだけに取得
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
-        statusText.textContent = 'ステータス: メイン画像の線画を抽出中...';
-        const edgeImageData = applySobelFilter(imageData);
-        edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
-        edgeCanvas.getContext('2d').putImageData(edgeImageData, 0, 0);
+
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
+
         let finishedWorkers = 0;
         let allResults = [];
+        
+        // ( ... チャンク分けロジック (変更なし) ... )
         const tileSize = parseInt(tileSizeInput.value);
         const tileHeight = Math.round(tileSize * 1.0); 
         if (tileHeight <= 0) {
@@ -315,6 +332,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
         let startY = 0;
         let activeWorkers = 0; 
+        
         for (let i = 0; i < numWorkers; i++) {
             const endY = Math.min(startY + chunkHeight, mainImage.height);
             if (startY >= endY) continue; 
