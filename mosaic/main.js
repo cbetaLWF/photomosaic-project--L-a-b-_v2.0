@@ -1,61 +1,35 @@
-// ★ 変更点: 線画抽出（Sobel）を「黒い線 + 透明な背景」で生成する
+// ★ 変更点: 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
+    // ( ... 変更なし: 前回の「黒い線 + 透明な背景」版の SobelFilter ... )
     const width = imageData.width;
     const height = imageData.height;
     const data = imageData.data;
-    
-    // 1. グレースケールに変換
     const grayscaleData = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
-        // 知覚輝度 (Luma)
         const gray = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
         grayscaleData[i / 4] = gray;
     }
-
-    // ★ 変更点: sobelDataを「透明」で初期化 (すべて0)
     const sobelData = new Uint8ClampedArray(data.length);
-    
-    const Gx = [
-        [-1, 0, 1],
-        [-2, 0, 2],
-        [-1, 0, 1]
-    ];
-    const Gy = [
-        [-1, -2, -1],
-        [0, 0, 0],
-        [1, 2, 1]
-    ];
-    
-    // ★ 変更点: どの程度の強さのエッジを「線」とみなすかの閾値
-    const threshold = 30; // 0〜255 の間で調整可能
-
-    // 2. Sobelフィルタ適用
+    const Gx = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
+    const Gy = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
+    const threshold = 30; 
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             let sumX = 0;
             let sumY = 0;
-
             for (let ky = -1; ky <= 1; ky++) {
                 for (let kx = -1; kx <= 1; kx++) {
                     const idx = ((y + ky) * width + (x + kx));
-                    const gray = grayscaleData[idx];
-                    sumX += gray * Gx[ky + 1][kx + 1];
-                    sumY += gray * Gy[ky + 1][kx + 1];
+                    sumX += grayscaleData[idx] * Gx[ky + 1][kx + 1];
+                    sumY += grayscaleData[idx] * Gy[ky + 1][kx + 1];
                 }
             }
-
             const magnitude = Math.sqrt(sumX * sumX + sumY * sumY);
             const i = (y * width + x) * 4;
-
-            // ★ 変更点: 閾値を超えたエッジのみを描画
             if (magnitude > threshold) {
-                sobelData[i] = 0; // R (黒)
-                sobelData[i + 1] = 0; // G (黒)
-                sobelData[i + 2] = 0; // B (黒)
-                // エッジの強さに応じて不透明度を変える (より滑らかな線画に)
-                sobelData[i + 3] = Math.min(255, magnitude * 1.5); // A (不透明度)
+                sobelData[i] = 0; sobelData[i + 1] = 0; sobelData[i + 2] = 0;
+                sobelData[i + 3] = Math.min(255, magnitude * 1.5);
             }
-            // 閾値以下の場合、sobelDataは初期値[0,0,0,0] (透明) のまま
         }
     }
     return new ImageData(sobelData, width, height);
@@ -127,28 +101,39 @@ function analyzeImageAndGetRecommendations(image) {
 
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // UI要素の取得
+    // --- UI要素の取得 ---
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
     const mainCanvas = document.getElementById('main-canvas');
     const progressBar = document.getElementById('progress-fill');
     const statusText = document.getElementById('status-text');
+    
+    // スライダー本体
     const tileSizeInput = document.getElementById('tile-size');
-    
-    // 両方のスライダーを取得
     const blendRangeInput = document.getElementById('blend-range');
-    const blendValue = document.getElementById('blend-value');
     const edgeOpacityInput = document.getElementById('edge-opacity-range');
-    const edgeOpacityValue = document.getElementById('edge-opacity-value');
-    
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
-    const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     const textureWeightInput = document.getElementById('texture-weight');
+    
+    // スライダーの値表示
+    const blendValue = document.getElementById('blend-value');
+    const edgeOpacityValue = document.getElementById('edge-opacity-value');
+    const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     const textureWeightValue = document.getElementById('texture-weight-value');
     
+    // ★ 変更点: 推奨値エリアのUI
+    const recommendationArea = document.getElementById('recommendation-area');
+    const applyRecommendationsButton = document.getElementById('apply-recommendations-button');
+    const recTileSize = document.getElementById('rec-tile-size');
+    const recBrightness = document.getElementById('rec-brightness');
+    const recTextureWeight = document.getElementById('rec-texture-weight');
+    const recBlendRange = document.getElementById('rec-blend-range');
+    const recEdgeOpacity = document.getElementById('rec-edge-opacity');
+
+    
     // 全ての必須要素が存在するかチェック
-    if (!mainCanvas || !statusText || !generateButton || !blendRangeInput || !edgeOpacityInput) {
+    if (!mainCanvas || !statusText || !generateButton || !blendRangeInput || !edgeOpacityInput || !recommendationArea) {
         console.error("Initialization Error: One or more required HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status, Sliders) are missing from the HTML.</p>";
         return;
@@ -158,9 +143,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     let tileData = null;
     let mainImage = null;
     let workers = [];
-    
-    // 生成した線画を保持するCanvas
     let edgeCanvas = null;
+    
+    // ★ 変更点: 推奨値を保持する変数
+    let currentRecommendations = null;
 
 
     // --- UIの初期設定 ---
@@ -191,22 +177,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 1. タイルデータの初期ロード ---
     try {
+        // ( ... 変更なし: JSONロードと6倍拡張(3x3)ベクトルのチェック ... )
         statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
-        if (!response.ok) {
-            throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。Analyzer Appでデータを作成し、/mosaic/フォルダに配置してください。`);
-        }
+        if (!response.ok) { throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。`); }
         tileData = await response.json();
-        
-        // 6倍拡張(3x3)ベクトルのJSONチェック
-        if (tileData.length === 0 || 
-            !tileData[0].patterns || 
-            tileData[0].patterns.length === 0 || 
-            !tileData[0].patterns[0].l_vector ||
-            tileData[0].patterns[0].l_vector.length !== 9) {
+        if (tileData.length === 0 || !tileData[0].patterns || tileData[0].patterns.length === 0 || !tileData[0].patterns[0].l_vector || tileData[0].patterns[0].l_vector.length !== 9) {
              throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトルではありません。Analyzer Appで新しいデータを再生成してください。');
         }
-        
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * (tileData[0].patterns ? tileData[0].patterns.length : 0)}パターン) ロード完了。メイン画像を選択してください。`;
         if (mainImageInput) mainImageInput.disabled = false;
     } catch (error) {
@@ -232,35 +210,69 @@ document.addEventListener('DOMContentLoaded', async () => {
                     ctx.drawImage(mainImage, 0, 0); // プレビュー表示
                     statusText.textContent = `ステータス: 画像ロード完了。推奨値を計算中...`;
 
-                    // ここで推奨値を計算・適用
+                    // ★ 変更点: 推奨値を計算し、UIに「表示」する (適用はしない)
                     try {
                         const rec = analyzeImageAndGetRecommendations(mainImage);
+                        currentRecommendations = rec; // 推奨値を保持
                         
-                        tileSizeInput.value = rec.tileSize;
+                        // 推奨値エリアのテキストを更新
+                        recTileSize.textContent = rec.tileSize;
+                        recBrightness.textContent = rec.brightnessCompensation;
+                        recTextureWeight.textContent = rec.textureWeight;
+                        recBlendRange.textContent = rec.blendRange;
+                        recEdgeOpacity.textContent = rec.edgeOpacity;
                         
-                        brightnessCompensationInput.value = rec.brightnessCompensation;
-                        brightnessCompensationValue.textContent = rec.brightnessCompensation;
+                        // エリアを表示
+                        recommendationArea.style.display = 'block';
                         
-                        textureWeightInput.value = rec.textureWeight;
-                        textureWeightValue.textContent = rec.textureWeight;
-                        
-                        blendRangeInput.value = rec.blendRange;
-                        blendValue.textContent = rec.blendRange;
-                        
-                        edgeOpacityInput.value = rec.edgeOpacity;
-                        edgeOpacityValue.textContent = rec.edgeOpacity;
-
-                        statusText.textContent = `ステータス: 推奨値を自動設定しました。生成ボタンを押してください。`;
+                        statusText.textContent = `ステータス: 推奨値を表示しました。適用ボタンを押すか、手動で設定してください。`;
                     } catch (err) {
                         console.error("Recommendation analysis failed:", err);
                         statusText.textContent = `ステータス: 画像ロード完了 (推奨値の計算に失敗)。`;
+                        recommendationArea.style.display = 'none';
                     }
+                    // ★ 変更点ここまで
                 };
                 mainImage.src = event.target.result;
             };
             reader.readAsDataURL(file);
         });
     }
+
+    // ★ 変更点: 「推奨値を適用」ボタンのリスナー
+    if (applyRecommendationsButton) {
+        applyRecommendationsButton.addEventListener('click', () => {
+            if (!currentRecommendations) {
+                statusText.textContent = 'ステータス: メイン画像をアップロードして、まず推奨値を計算してください。';
+                return;
+            }
+            
+            try {
+                const rec = currentRecommendations;
+                
+                // 保持していた推奨値をスライダーと値表示の両方に適用
+                tileSizeInput.value = rec.tileSize;
+                
+                brightnessCompensationInput.value = rec.brightnessCompensation;
+                brightnessCompensationValue.textContent = rec.brightnessCompensation;
+                
+                textureWeightInput.value = rec.textureWeight;
+                textureWeightValue.textContent = rec.textureWeight;
+                
+                blendRangeInput.value = rec.blendRange;
+                blendValue.textContent = rec.blendRange;
+                
+                edgeOpacityInput.value = rec.edgeOpacity;
+                edgeOpacityValue.textContent = rec.edgeOpacity;
+
+                statusText.textContent = 'ステータス: 推奨値をスライダーに適用しました。';
+            } catch (err) {
+                 console.error("Failed to apply recommendations:", err);
+                 statusText.textContent = 'ステータス: 推奨値の適用に失敗しました。';
+            }
+        });
+    }
+
 
     // 起動中の全Workerを強制終了するヘルパー関数
     function terminateWorkers() {
@@ -270,37 +282,30 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 3. モザイク生成開始 (並列化ロジック) ---
     generateButton.addEventListener('click', () => {
+        // ( ... 変更なし: 並列でWorkerを起動し、結果を待つ ... )
+        // ( ... applySobelFilter呼び出しも変更なし ... )
         if (!mainImage) return;
-        
         terminateWorkers(); 
         generateButton.disabled = true;
         downloadButton.style.display = 'none';
         progressBar.style.width = '0%';
         statusText.textContent = 'ステータス: 画像データの準備中...';
-
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
-
-        // Worker処理の「前に」線画抽出を実行
         statusText.textContent = 'ステータス: メイン画像の線画を抽出中...';
         const edgeImageData = applySobelFilter(imageData);
-        // 抽出した線画をオフスクリーンCanvasに保持
         edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
         edgeCanvas.getContext('2d').putImageData(edgeImageData, 0, 0);
-
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
-
         let finishedWorkers = 0;
         let allResults = [];
-        
-        // チャンク分けロジック (タイル高さの倍数にアライン)
         const tileSize = parseInt(tileSizeInput.value);
-        const tileHeight = Math.round(tileSize * 1.0); // 正方形
+        const tileHeight = Math.round(tileSize * 1.0); 
         if (tileHeight <= 0) {
             statusText.textContent = 'エラー: タイルサイズは0より大きくしてください。';
             generateButton.disabled = false;
@@ -310,16 +315,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
         let startY = 0;
         let activeWorkers = 0; 
-        
         for (let i = 0; i < numWorkers; i++) {
             const endY = Math.min(startY + chunkHeight, mainImage.height);
-            if (startY >= endY) {
-                continue; 
-            }
+            if (startY >= endY) continue; 
             activeWorkers++; 
             const worker = new Worker('mosaic_worker.js');
             workers.push(worker);
-
             worker.onmessage = (e) => {
                 if (e.data.type === 'status') {
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
@@ -333,7 +334,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (finishedWorkers === activeWorkers) {
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
                         progressBar.style.width = '100%';
-                        // renderMosaic に両方の値を渡す
                         renderMosaic(
                             allResults, 
                             mainImage.width, 
@@ -352,15 +352,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 generateButton.disabled = false;
                 console.error(`Worker ${i+1} Error:`, error);
             };
-
-            // Workerにデータを送信
             worker.postMessage({ 
                 imageData: imageData, 
                 tileData: tileData,
                 tileSize: tileSize,
                 width: mainImage.width,
                 height: mainImage.height,
-                // blendOpacityはWorkerに不要
                 brightnessCompensation: parseInt(brightnessCompensationInput.value),
                 textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                 startY: startY,
@@ -368,7 +365,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             startY += chunkHeight;
         }
-
         if (activeWorkers === 0 && mainImage.height > 0) {
              statusText.textContent = 'ステータス: Workerを起動できませんでした。';
              generateButton.disabled = false;
@@ -376,13 +372,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 ---
+    // (★ 変更なし: 陰影と線画の2段階ブレンド)
     async function renderMosaic(results, width, height, blendOpacity, edgeOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
         mainCanvas.height = height;
         ctx.clearRect(0, 0, width, height);
 
-        // クリッピング設定
         ctx.save(); 
         ctx.beginPath();
         ctx.rect(0, 0, width, height); 
@@ -397,7 +393,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const brightnessFactor = brightnessCompensation / 100; 
 
         for (const tile of results) {
-            // タイルのロードと正方形クロップ/反転描画
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
@@ -462,8 +457,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         progressBar.style.width = '100%';
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
 
-        // --- 2段階のブレンド処理 ---
-
         // 1. 「陰影」ブレンド (Soft Light)
         if (blendOpacity > 0) {
             ctx.globalCompositeOperation = 'soft-light'; 
@@ -472,7 +465,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // 2. 「線画」ブレンド (Multiply)
-        // 「黒い線 + 透明な背景」を重ねる
         if (edgeOpacity > 0 && edgeCanvas) {
             ctx.globalCompositeOperation = 'multiply'; 
             ctx.globalAlpha = edgeOpacity / 100;
