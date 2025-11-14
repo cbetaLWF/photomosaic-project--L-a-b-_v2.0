@@ -15,6 +15,49 @@
         #controls button:disabled { background-color: #93c5fd; cursor: not-allowed; }
         #controls button:hover:enabled { background-color: #2563eb; }
         
+        /* ★ 変更点: 推奨値エリアのスタイル */
+        #recommendation-area {
+            display: none; /* JSで表示 */
+            background-color: #fefce8; /* 黄色っぽい背景 */
+            border: 1px solid #fde047;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+        #recommendation-area h3 {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #ca8a04;
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        #recommendation-values {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            font-size: 0.9em;
+        }
+        #recommendation-values div {
+            background: #fff;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        #recommendation-values strong { color: #333; }
+        #apply-recommendations-button {
+            background-color: #f59e0b; /* オレンジ色 */
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: background-color 0.2s;
+        }
+        #apply-recommendations-button:hover {
+            background-color: #d97706;
+        }
+
+
         #progress-bar { width: 100%; height: 10px; background: #e0e7ff; border-radius: 5px; margin-top: 10px; overflow: hidden; }
         #progress-fill { height: 100%; width: 0%; background: #4f46e5; transition: width 0.3s; }
         #status-text { margin-top: 10px; font-style: italic; color: #6b7280; }
@@ -39,39 +82,55 @@
             <div class="control-group">
                 <label for="main-image-input">ステップ1: メイン画像をアップロード</label>
                 <input type="file" id="main-image-input" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
+                
+                <!-- ★ 変更点: 推奨値エリアをここに追加 -->
+                <div id="recommendation-area">
+                    <h3><span class="text-yellow-600">💡</span> 画像の推奨パラメータ</h3>
+                    <div id="recommendation-values">
+                        <div><strong>タイル幅:</strong> <span id="rec-tile-size">0</span> px</div>
+                        <div><strong>L*明度補正:</strong> <span id="rec-brightness">0</span> %</div>
+                        <div><strong>テクスチャ:</strong> <span id="rec-texture-weight">0</span></div>
+                        <div><strong>ブレンド(陰影):</strong> <span id="rec-blend-range">0</span> %</div>
+                        <div><strong>線画の強さ:</strong> <span id="rec-edge-opacity">0</span> %</div>
+                    </div>
+                    <button id="apply-recommendations-button">推奨値をスライダーに適用</button>
+                </div>
+                <!-- ★ 変更点ここまで -->
             </div>
 
-            <!-- ★ 変更点: 5つのパラメータを 3列 + 2列 で配置 -->
-            <div class="control-group grid md:grid-cols-3 gap-4">
-                <div>
-                    <label for="tile-size">タイル幅 (px):</label>
-                    <input type="number" id="tile-size" value="20" min="10" max="100" class="w-full p-2 border border-gray-300 rounded-md">
-                    <p class="text-xs text-gray-500 mt-1">タイル高さは正方形に調整されます。</p>
+            <!-- ★ 変更点: UIの順番を変更 (ステップ2: パラメータ設定) -->
+            <div class="control-group">
+                <label>ステップ2: パラメータ設定 (推奨値から調整可)</label>
+                <div class="grid md:grid-cols-3 gap-4 mt-2">
+                    <div>
+                        <label for="tile-size">タイル幅 (px):</label>
+                        <input type="number" id="tile-size" value="20" min="10" max="100" class="w-full p-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">タイル高さは正方形に調整されます。</p>
+                    </div>
+                    <div>
+                        <label for="brightness-compensation">L*明D補正 (%): <span id="brightness-compensation-value">100</span>%</label>
+                        <input type="range" id="brightness-compensation" min="0" max="100" value="100" class="w-full" oninput="document.getElementById('brightness-compensation-value').textContent = this.value">
+                    </div>
+                    <div>
+                        <label for="texture-weight">テクスチャ重視度: <span id="texture-weight-value">50</span></label>
+                        <input type="range" id="texture-weight" min="0" max="200" value="50" class="w-full" oninput="document.getElementById('texture-weight-value').textContent = this.value">
+                    </div>
                 </div>
-                <div>
-                    <label for="brightness-compensation">L*明度補正 (%): <span id="brightness-compensation-value">100</span>%</label>
-                    <input type="range" id="brightness-compensation" min="0" max="100" value="100" class="w-full" oninput="document.getElementById('brightness-compensation-value').textContent = this.value">
-                </div>
-                <div>
-                    <label for="texture-weight">テクスチャ重視度: <span id="texture-weight-value">50</span></label>
-                    <input type="range" id="texture-weight" min="0" max="200" value="50" class="w-full" oninput="document.getElementById('texture-weight-value').textContent = this.value">
-                </div>
-            </div>
-            <div class="control-group grid md:grid-cols-2 gap-4">
-                <div>
-                    <label for="blend-range">ブレンド度 (陰影): <span id="blend-value">30</span>%</label>
-                    <input type="range" id="blend-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('blend-value').textContent = this.value">
-                    <p class="text-xs text-gray-500 mt-1">元画像の陰影(Multiply)を重ねます。</p>
-                </div>
-                <!-- ★ 変更点: 線画スライダーを新設 -->
-                <div>
-                    <label for="edge-opacity-range">線画の強さ (%): <span id="edge-opacity-value">30</span>%</label>
-                    <input type="range" id="edge-opacity-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('edge-opacity-value').textContent = this.value">
-                    <p class="text-xs text-gray-500 mt-1">元画像の輪郭(Soft Light)を重ねます。</p>
+                <div class="grid md:grid-cols-2 gap-4 mt-4">
+                    <div>
+                        <label for="blend-range">ブレンド度 (陰影): <span id="blend-value">30</span>%</label>
+                        <input type="range" id="blend-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('blend-value').textContent = this.value">
+                        <p class="text-xs text-gray-500 mt-1">元画像の陰影(Soft Light)を重ねます。</p>
+                    </div>
+                    <div>
+                        <label for="edge-opacity-range">線画の強さ (%): <span id="edge-opacity-value">30</span>%</label>
+                        <input type="range" id="edge-opacity-range" min="0" max="100" value="30" class="w-full" oninput="document.getElementById('edge-opacity-value').textContent = this.value">
+                        <p class="text-xs text-gray-500 mt-1">元画像の輪郭(Multiply)を重ねます。</p>
+                    </div>
                 </div>
             </div>
             
-            <button id="generate-button" disabled>ステップ2: モザイク生成開始</button>
+            <button id="generate-button" disabled>ステップ3: モザイク生成開始</button>
         </div>
 
         <div id="progress-area">
