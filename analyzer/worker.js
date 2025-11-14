@@ -27,9 +27,7 @@ function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
-/**
- * ★ 変更点: 縦長/横長画像に対応したクロップと6パターン解析
- */
+// 縦長/横長画像に対応したクロップと6パターン解析
 async function analyzeImagePatterns(file) {
     const imageBitmap = await createImageBitmap(file);
     const patterns = [];
@@ -41,7 +39,6 @@ async function analyzeImagePatterns(file) {
     const size = Math.min(baseWidth, baseHeight);
     const isHorizontal = baseWidth > baseHeight; // 横長画像か？
 
-    // ★ 変更点: 縦長/横長でクロップ設定を動的に変更
     const cropSettings = isHorizontal ? [
         // 横長画像の場合: Yは0固定、Xを動かす
         { name: "cropL", x: 0, y: 0 },
@@ -74,7 +71,6 @@ async function analyzeImagePatterns(file) {
             
             // --- 描画フェーズ ---
             ctx.clearRect(0, 0, size, size);
-            // ★ 変更点: crop.x と crop.y を正しく使用
             if (flip.flip) {
                 ctx.save();
                 ctx.scale(-1, 1); // 左右反転
@@ -86,11 +82,11 @@ async function analyzeImagePatterns(file) {
             
             // --- 解析フェーズ ---
             const imageData = ctx.getImageData(0, 0, size, size);
+            // ( ... 3x3 L*ベクトル計算 ... )
             const data = imageData.data;
             const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             const pixelCountTotal = data.length / 4;
-
             for (let y = 0; y < size; y++) {
                 const row = (y < oneThird) ? 0 : (y < twoThirds ? 1 : 2);
                 for (let x = 0; x < size; x++) {
@@ -103,12 +99,10 @@ async function analyzeImagePatterns(file) {
                     sums[gridIndex].count++;
                 }
             }
-            
             const r_avg = r_sum_total / pixelCountTotal;
             const g_avg = g_sum_total / pixelCountTotal;
             const b_avg = b_sum_total / pixelCountTotal;
             const lab = rgbToLab(r_avg, g_avg, b_avg);
-
             const l_vector = sums.map(s => {
                 if (s.count === 0) return 0;
                 return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
@@ -137,10 +131,18 @@ self.onmessage = async (e) => {
 
         try {
             const patterns = await analyzeImagePatterns(file);
+
+            // ★ 変更点: サムネイルURLを生成
+            const originalUrl = `tiles/${file.name}`;
+            const thumbUrl = originalUrl.replace('tiles/', 'tiles_thumb/');
+
+            // 結果を格納 (新しいJSON構造)
             results.push({
-                url: `tiles/${file.name}`, 
+                url: originalUrl, 
+                thumb_url: thumbUrl, // ★ サムネイルURLを追加
                 patterns: patterns 
             });
+            
             self.postMessage({ type: 'progress', progress: (i + 1) / totalFiles, fileName: file.name });
 
         } catch (error) {
