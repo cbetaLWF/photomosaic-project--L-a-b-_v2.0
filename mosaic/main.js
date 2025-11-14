@@ -1,4 +1,4 @@
-// ( ... 変更なし: applySobelFilter, analyzeImageAndGetRecommendations ... )
+// 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
     const width = imageData.width;
     const height = imageData.height;
@@ -82,6 +82,7 @@ function applySobelFilter(imageData) {
     };
 }
 
+// 画像を分析し、推奨値を返すヘルパー関数
 function analyzeImageAndGetRecommendations(image, analysisImageData) {
     const width = image.width;
     const height = image.height;
@@ -117,7 +118,6 @@ function analyzeImageAndGetRecommendations(image, analysisImageData) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     // --- UI要素の取得 ---
-    // ( ... 変更なし: スライダー, ボタン等の取得 ... )
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
     const downloadButton = document.getElementById('download-button');
@@ -140,7 +140,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const recTextureWeight = document.getElementById('rec-texture-weight');
     const recBlendRange = document.getElementById('rec-blend-range');
     const recEdgeOpacity = document.getElementById('rec-edge-opacity');
-    // ★ 変更点: previewModeCheckbox を削除
+    
+    // ★ 変更点: 高速プレビューモードを再追加
+    const previewModeCheckbox = document.getElementById('preview-mode-checkbox');
+
     const downloadSpinner = document.getElementById('download-spinner');
     const downloadWarningArea = document.getElementById('download-warning-area');
     const downloadWarningMessage = document.getElementById('download-warning-message');
@@ -149,13 +152,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const resolutionScaleInput = document.getElementById('resolution-scale');
     const jpegQualityInput = document.getElementById('jpeg-quality');
     
-    // ★ 変更点: タイミングログ用のUI
     const timingLog = document.getElementById('timing-log');
 
     
     // ( ... 必須要素チェック (null許容) ... )
-    if (!mainCanvas || !statusText || !generateButton || !mainImageInput) {
-        // ( ... 変更なし ... )
+    // ★ 変更点: 必須要素に previewModeCheckbox を追加
+    if (!mainCanvas || !statusText || !generateButton || !mainImageInput || !previewModeCheckbox || !tileSizeInput) {
+        console.error("Initialization Error: One or more critical HTML elements are missing.");
+        document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because critical elements (Canvas, Buttons, Status, mainImageInput, previewModeCheckbox, tileSizeInput) are missing from the HTML.</p>";
+        return;
     }
     
     const ctx = mainCanvas.getContext('2d');
@@ -169,25 +174,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     
-    // ★ 変更点: 速度計測用のグローバルタイマー
+    // ★ 変更点: プレビューモードの状態を保持
+    let isPreviewRender = true;
     let t_worker_start = 0;
 
 
     // ( ... UIの初期設定 (スライダーリスナー) ... )
-    // ( ... 1. タイルデータの初期ロード (thumb_urlチェック削除) ... )
+    generateButton.disabled = true;
+    if(downloadButton) downloadButton.style.display = 'none';
+    if (brightnessCompensationInput && brightnessCompensationValue) { /* ... */ }
+    if (textureWeightInput && textureWeightValue) { /* ... */ }
+    if (blendRangeInput && blendValue) { /* ... */ }
+    if (edgeOpacityInput && edgeOpacityValue) { /* ... */ }
+
+    // --- 1. タイルデータの初期ロード ---
     try {
         statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
         if (!response.ok) { throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。`); }
         tileData = await response.json();
         
-        // ★ 変更点: thumb_url のチェックを削除
+        // ★ 変更点: thumb_url のチェックを再追加
         if (tileData.length === 0 || 
             !tileData[0].patterns || 
             tileData[0].patterns.length === 0 || 
             !tileData[0].patterns[0].l_vector ||
-            tileData[0].patterns[0].l_vector.length !== 9) {
-             throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトルではありません。Analyzer Appで新しいデータを再生成してください。');
+            tileData[0].patterns[0].l_vector.length !== 9 ||
+            !tileData[0].thumb_url) { // ★
+             throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトル/thumb_urlではありません。Analyzer Appで新しいデータを再生成してください。');
         }
         
         statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * (tileData[0].patterns ? tileData[0].patterns.length : 0)}パターン) ロード完了。メイン画像を選択してください。`;
@@ -285,8 +299,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
         };
         
-        // ★ 変更点: プレビューモードのチェックを削除
-        const isPreview = true; 
+        // ★ 変更点: プレビューモードのチェックを再追加
+        const isPreview = previewModeCheckbox.checked; 
 
         // 3. キャッシュのチェック
         if (cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
@@ -304,12 +318,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 currentLightParams.blendOpacity, 
                 currentLightParams.edgeOpacity, 
                 currentLightParams.brightnessCompensation,
-                isPreview 
+                isPreview // ★ プレビューフラグを渡す
             ).then(() => {
                 // ★ 変更点: 高速再描画（フェーズ2）の時間計測
                 const t_render_end = performance.now();
                 const renderTime = (t_render_end - t_render_start) / 1000.0;
-                if(timingLog) timingLog.textContent += `\n[キャッシュ使用] 再描画 (F2): ${renderTime.toFixed(3)} 秒`;
+                if(timingLog) timingLog.textContent += `\n[キャッシュ使用] 再描画 (F2) (${isPreview ? 'Thumb' : 'Full'}): ${renderTime.toFixed(3)} 秒`;
             });
             
             generateButton.disabled = false;
@@ -372,7 +386,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             currentLightParams.blendOpacity, 
                             currentLightParams.edgeOpacity, 
                             currentLightParams.brightnessCompensation,
-                            isPreview
+                            isPreview // ★ プレビューフラグを渡す
                         );
                         terminateWorkers();
                     }
@@ -400,10 +414,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         targetCanvas, 
         results, width, height,
         blendOpacity, edgeOpacity, brightnessCompensation, 
-        isPreview = true, 
+        isPreview = true, // ★ プレビューフラグ
         scale = 1.0 
     ) {
         
+        // ★ 変更点: プレビューモードの状態を保存
+        isPreviewRender = isPreview; 
+
         const t_render_start = performance.now(); // ★ タイマー開始 (F2)
 
         const canvasWidth = width * scale;
@@ -414,7 +431,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const ctx = targetCanvas.getContext('2d');
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        statusText.textContent = `ステータス: タイル画像(${isPreview ? 'プレビュー(フル解像度)' : '高画質'})を読み込み、描画中 (スケール: ${scale}x)...`;
+        // ★ 変更点: プレビューモードに応じてログを変更
+        statusText.textContent = `ステータス: タイル画像(${isPreview ? 'サムネイル' : '高画質'})を読み込み、描画中 (スケール: ${scale}x)...`;
 
         ctx.save(); 
         ctx.beginPath();
@@ -475,17 +493,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                     resolve();
                 };
                 img.onerror = () => {
-                    // ★ 変更点: プレビューモードのフォールバックを削除 (常にフル解像度)
-                    console.error(`タイル画像のロードに失敗: ${tile.url}`);
-                    const grayValue = Math.round(tile.targetL * 2.55); 
-                    ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
-                    ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
-                    loadedCount++;
-                    resolve(); 
+                    // ★ 変更点: プレビューモードのフォールバックを再追加
+                    if (isPreview && tile.thumb_url && img.src.includes(tile.thumb_url)) {
+                        console.warn(`サムネイルのロードに失敗: ${tile.thumb_url}. フル解像度で再試行します: ${tile.url}`);
+                        img.src = tile.url; // フル解像度で再試行
+                    } else {
+                        console.error(`タイル画像のロードに失敗: ${tile.url}`);
+                        const grayValue = Math.round(tile.targetL * 2.55); 
+                        ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
+                        ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
+                        loadedCount++;
+                        resolve(); 
+                    }
                 };
                 
-                // ★ 変更点: 常に tile.url (フル解像度) を使用
-                img.src = tile.url;
+                // ★ 変更点: isPreviewに応じてURLを切り替え
+                // (これが前回のバグの修正点です)
+                img.src = (isPreview && tile.thumb_url) ? tile.thumb_url : tile.url;
             });
             promises.push(p);
         }
@@ -522,14 +546,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         const blendTime = (t_render_blend_end - t_render_load_end) / 1000.0;
         const totalRenderTime = (t_render_blend_end - t_render_start) / 1000.0;
         if(timingLog) {
-            timingLog.textContent += `\n描画 (F2) 合計: ${totalRenderTime.toFixed(3)} 秒`;
+            // isPreviewに応じてログを変更
+            timingLog.textContent += `\n描画 (F2) (${isPreview ? 'Thumb' : 'Full'}) 合計: ${totalRenderTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - タイルロード/描画: ${loadTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - ブレンド/線画合成: ${blendTime.toFixed(3)} 秒`;
         }
 
-        // isPreviewフラグは削除 (ダウンロード処理は別)
-        generateButton.disabled = false;
-        if (downloadButton) downloadButton.style.display = 'block';
+        // プレビュー描画時のみ、ボタンを有効化
+        if (isPreview) {
+            generateButton.disabled = false;
+            if (downloadButton) downloadButton.style.display = 'block';
+        }
     }
 
     // --- 5. ダウンロード機能 (JPEG & 警告対応) ---
