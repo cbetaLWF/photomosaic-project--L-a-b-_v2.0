@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
     const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
     
-    // ★ 修正点: 以下の2行が欠落していたのを修正
+    // 「テクスチャ重視度」スライダー
     const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
     
@@ -25,21 +25,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ctx = mainCanvas.getContext('2d');
     let tileData = null;
     let mainImage = null;
-
-    // ★ 変更点: 起動したWorkerを管理するための配列
     let workers = [];
 
     // --- UIの初期設定 ---
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
 
-    // 明度補正スライダーの値表示を更新
+    // ( ... スライダーのリスナー ... )
     if (brightnessCompensationInput && brightnessCompensationValue) {
         brightnessCompensationInput.addEventListener('input', () => {
             brightnessCompensationValue.textContent = brightnessCompensationInput.value;
         });
     }
-    // テクスチャ重視度スライダーの値表示を更新
     if (textureWeightInput && textureWeightValue) {
         textureWeightInput.addEventListener('input', () => {
             textureWeightValue.textContent = textureWeightInput.value;
@@ -55,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileData = await response.json();
         
-        // 新しいJSON構造 (patterns配列) をチェック
+        // ( ... 6倍拡張(3x3)ベクトルのJSONチェック ... )
         if (tileData.length === 0 || 
             !tileData[0].patterns || 
             tileData[0].patterns.length === 0 || 
@@ -75,20 +72,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 2. メイン画像アップロード ---
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
+            // ( ... 変更なし: 画像をロードしてプレビューするだけ ... )
             const file = e.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = (event) => {
                 mainImage = new Image();
                 mainImage.onload = () => {
                     generateButton.disabled = false;
                     downloadButton.style.display = 'none';
-
-                    // Canvasのサイズをメイン画像に合わせる
                     mainCanvas.width = mainImage.width;
                     mainCanvas.height = mainImage.height;
-                    
                     ctx.clearRect(0, 0, mainImage.width, mainImage.height);
                     ctx.drawImage(mainImage, 0, 0); // プレビュー表示
                     statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
@@ -105,17 +99,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         workers = [];
     }
 
-
     // --- 3. モザイク生成開始 (並列化ロジック) ---
     generateButton.addEventListener('click', () => {
+        // ( ... 変更なし: 並列でWorkerを起動し、結果を待つ ... )
         if (!mainImage) return;
-        
-        terminateWorkers(); // 念のため既存のWorkerを終了
+        terminateWorkers();
         generateButton.disabled = true;
         downloadButton.style.display = 'none';
         progressBar.style.width = '0%';
         statusText.textContent = 'ステータス: 画像データの準備中...';
-
+        
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = mainImage.width;
         tempCanvas.height = mainImage.height;
@@ -123,7 +116,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
-        // PCのコア数を取得 (フォールバックで4)
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
 
@@ -131,37 +123,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         let allResults = [];
         const chunkHeight = Math.ceil(mainImage.height / numWorkers);
         
-        // コア数分だけWorkerを起動するループ
         for (let i = 0; i < numWorkers; i++) {
             const worker = new Worker('mosaic_worker.js');
             workers.push(worker);
-
             const startY = i * chunkHeight;
             const endY = Math.min((i + 1) * chunkHeight, mainImage.height);
 
-            // Workerからのメッセージ受信
             worker.onmessage = (e) => {
                 if (e.data.type === 'status') {
-                    // 複数のWorkerからステータスが送られるため、(Worker i) のように区別する
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
-                
                 } else if (e.data.type === 'progress') {
-                    // 全Workerの平均進捗を表示（簡易的）
                     const currentProgress = parseFloat(progressBar.style.width) || 0;
                     const newProgress = currentProgress + (e.data.progress * 100 / numWorkers);
                     progressBar.style.width = `${newProgress}%`;
-                
                 } else if (e.data.type === 'complete') {
-                    // Workerから返ってきた「部分的な」結果を結合する
                     allResults = allResults.concat(e.data.results);
                     finishedWorkers++;
-                    
-                    // 全てのWorkerが完了したかチェック
                     if (finishedWorkers === numWorkers) {
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
                         progressBar.style.width = '100%';
-                        
-                        // 結合した「完全な」結果を描画関数に渡す
                         renderMosaic(
                             allResults, 
                             mainImage.width, 
@@ -169,39 +149,33 @@ document.addEventListener('DOMContentLoaded', async () => {
                             parseInt(blendRangeInput.value), 
                             parseInt(brightnessCompensationInput.value)
                         );
-                        terminateWorkers(); // 全Workerを終了
+                        terminateWorkers();
                     }
                 }
             };
-
-            // Workerでエラーが発生した場合
             worker.onerror = (error) => {
                 statusText.textContent = `エラー: Worker ${i+1} で問題が発生しました。 ${error.message}`;
-                terminateWorkers(); // 全てのWorkerを停止
+                terminateWorkers();
                 generateButton.disabled = false;
                 console.error(`Worker ${i+1} Error:`, error);
             };
-
-            // Workerにデータを送信
             worker.postMessage({ 
                 imageData: imageData, 
-                tileData: tileData, // 新しいJSON構造のタイルデータ
+                tileData: tileData,
                 tileSize: parseInt(tileSizeInput.value),
                 width: mainImage.width,
                 height: mainImage.height,
                 blendOpacity: parseInt(blendRangeInput.value),
                 brightnessCompensation: parseInt(brightnessCompensationInput.value),
-                textureWeight: parseFloat(textureWeightInput.value) / 100.0, // 0.0-2.0にスケーリング
-                
-                // このWorkerの担当範囲（Y座標）を指示
+                textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                 startY: startY,
                 endY: endY
             });
-            // imageDataは転送しない (全Workerがコピーを持つ)
         }
     });
 
     // --- 4. 最終的なモザイクの描画 ---
+    // (★ 変更点: 正方形クロップ＆反転に対応)
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
@@ -220,6 +194,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
+                    // ( ... 明度補正(finalBrightness)の計算 ... )
                     let targetL = tile.targetL; 
                     let tileL = tile.tileL; 
                     if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -230,9 +205,59 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
                     
                     ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-                    ctx.drawImage(img, tile.x, tile.y, tile.width, tile.height);
-                    ctx.filter = 'none';
 
+                    // ★★★ ここからが全面改修 ★★★
+
+                    // 1. ソース画像のサイズ（元の16:9画像のサイズ）
+                    const sWidth = img.naturalWidth;
+                    const sHeight = img.naturalHeight;
+                    
+                    // 2. Analyzerがクロップした正方形のサイズ
+                    const sSize = Math.min(sWidth, sHeight);
+
+                    // 3. 'tile.patternType' (e.g., "cropC_flip1") をパース
+                    const typeParts = tile.patternType.split('_'); // ["cropC", "flip1"]
+                    const cropType = typeParts[0]; // "cropL", "cropC", "cropR"
+                    const flipType = typeParts[1]; // "flip0", "flip1"
+
+                    // 4. クロップタイプに応じて、ソース矩形(sx, sy)を決定
+                    let sx = 0;
+                    const sy = 0; // 常に y=0
+                    if (cropType === "cropC") {
+                        sx = Math.floor((sWidth - sSize) / 2);
+                    } else if (cropType === "cropR") {
+                        sx = sWidth - sSize;
+                    }
+                    // "cropL" は sx = 0 のまま
+
+                    // 5. 描画先の矩形（Canvas上の位置と、正方形のサイズ）
+                    const dx = tile.x;
+                    const dy = tile.y;
+                    const dWidth = tile.width; // worker から正方形の幅が来る
+                    const dHeight = tile.height; // worker から正方形の高さが来る
+
+                    // 6. 反転(flip)処理と描画
+                    ctx.save();
+                    if (flipType === "flip1") {
+                        // 水平反転
+                        ctx.scale(-1, 1);
+                        // 描画先を反転 (-dx - dWidth)
+                        ctx.drawImage(img, 
+                            sx, sy, sSize, sSize, // ソース矩形 (正方形)
+                            -dx - dWidth, dy, dWidth, dHeight // 描画先矩形 (反転)
+                        );
+                    } else {
+                        // 通常描画
+                        ctx.drawImage(img, 
+                            sx, sy, sSize, sSize, // ソース矩形 (正方形)
+                            dx, dy, dWidth, dHeight // 描画先矩形 (通常)
+                        );
+                    }
+                    ctx.restore();
+                    
+                    // ★★★ ここまでが全面改修 ★★★
+
+                    ctx.filter = 'none';
                     loadedCount++;
                     resolve();
                 };
@@ -249,12 +274,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             promises.push(p);
         }
 
-        // 全タイルのロード（描画）を待つ
         await Promise.all(promises);
         
         progressBar.style.width = '100%';
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
-
 
         // --- ブレンド処理 ---
         if (blendOpacity > 0) {
@@ -272,7 +295,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 5. ダウンロード機能 (PNG形式) ---
     downloadButton.addEventListener('click', () => {
-        // PNG形式 (ロスレス) でダウンロード
         const dataURL = mainCanvas.toDataURL('image/png'); 
         const a = document.createElement('a');
         a.href = dataURL;
