@@ -141,7 +141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const recBlendRange = document.getElementById('rec-blend-range');
     const recEdgeOpacity = document.getElementById('rec-edge-opacity');
     
-    // ★ 変更点: 高速プレビューモードを再追加
+    // 高速プレビューモード
     const previewModeCheckbox = document.getElementById('preview-mode-checkbox');
 
     const downloadSpinner = document.getElementById('download-spinner');
@@ -156,7 +156,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     
     // ( ... 必須要素チェック (null許容) ... )
-    // ★ 変更点: 必須要素に previewModeCheckbox を追加
     if (!mainCanvas || !statusText || !generateButton || !mainImageInput || !previewModeCheckbox || !tileSizeInput) {
         console.error("Initialization Error: One or more critical HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because critical elements (Canvas, Buttons, Status, mainImageInput, previewModeCheckbox, tileSizeInput) are missing from the HTML.</p>";
@@ -174,7 +173,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     
-    // ★ 変更点: プレビューモードの状態を保持
     let isPreviewRender = true;
     let t_worker_start = 0;
 
@@ -187,7 +185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (blendRangeInput && blendValue) { /* ... */ }
     if (edgeOpacityInput && edgeOpacityValue) { /* ... */ }
 
-    // ★ 修正点: 問題③対応 - キャッシュクリアリスナー
+    // ★ 修正点: 問題③対応 - キャッシュクリアリスナーの実装
     const cacheClearer = () => {
         if (cachedResults) {
             statusText.textContent = 'ステータス: タイルサイズまたはテクスチャ設定が変更されました。再計算が必要です。';
@@ -197,9 +195,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             if(downloadButton) downloadButton.style.display = 'none';
         }
     };
-    if (tileSizeInput) tileSizeInput.addEventListener('change', cacheClearer);
-    if (textureWeightInput) textureWeightInput.addEventListener('change', cacheClearer);
-    // スライダーのinputイベントはメインの再描画に任せる
+    
+    // changeイベントに加え、即座に反応するinputイベントも追加
+    if (tileSizeInput) {
+        tileSizeInput.addEventListener('change', cacheClearer);
+        tileSizeInput.addEventListener('input', cacheClearer); 
+    }
+    if (textureWeightInput) {
+        textureWeightInput.addEventListener('change', cacheClearer);
+        textureWeightInput.addEventListener('input', cacheClearer); 
+    }
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -214,7 +219,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             tileData[0].patterns.length === 0 || 
             !tileData[0].patterns[0].l_vector ||
             tileData[0].patterns[0].l_vector.length !== 9 ||
-            !tileData[0].thumb_url) { // ★
+            !tileData[0].thumb_url) { 
              throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトル/thumb_urlではありません。Analyzer Appで新しいデータを再生成してください。');
         }
         
@@ -267,7 +272,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (recBrightness) recBrightness.textContent = recommendations.brightnessCompensation;
                             if (recTextureWeight) recTextureWeight.textContent = recommendations.textureWeight;
                             if (recBlendRange) recBlendRange.textContent = recommendations.blendRange;
-                            if (recEdgeOpacity) recEdgeOpacity.textContent = recommendations.tileSize;
+                            if (recEdgeOpacity) recEdgeOpacity.textContent = recommendations.edgeOpacity;
                             recommendationArea.style.display = 'block';
                             statusText.textContent = `ステータス: 推奨値を表示しました。適用ボタンを押すか、手動で設定してください。`;
                         } catch (err) {
@@ -340,7 +345,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (progressBar) progressBar.style.width = '0%';
         if (timingLog) timingLog.textContent = '処理時間 (テスト用):'; // ★ ログリセット
 
-        // ( ... 変更なし: currentHeavyParams, currentLightParams の取得 ... )
         const currentHeavyParams = {
             src: mainImage.src,
             tileSize: parseInt(tileSizeInput ? tileSizeInput.value : 20), 
@@ -352,7 +356,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
         };
         
-        // ★ 変更点: プレビューモードのチェックを再追加
         const isPreview = previewModeCheckbox.checked; 
 
         // 3. キャッシュのチェック
@@ -471,7 +474,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         scale = 1.0 
     ) {
         
-        // ★ 変更点: プレビューモードの状態を保存
         isPreviewRender = isPreview; 
 
         const t_render_start = performance.now(); // ★ タイマー開始 (F2)
@@ -484,7 +486,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const ctx = targetCanvas.getContext('2d');
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        // ★ 変更点: プレビューモードに応じてログを変更
         statusText.textContent = `ステータス: タイル画像(${isPreview ? 'サムネイル' : '高画質'})を読み込み、描画中 (スケール: ${scale}x)...`;
 
         ctx.save(); 
@@ -504,7 +505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
-                    // ( ... 変更なし: 明度補正、クロップ/反転ロジック ... )
+                    // ( ... 明度補正、クロップ/反転ロジック ... )
                     let targetL = tile.targetL; 
                     let tileL = tile.tileL; 
                     if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -546,11 +547,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     resolve();
                 };
                 img.onerror = () => {
-                    // ★ 変更点: プレビューモードのフォールバックを再追加
+                    // ★ 修正点: 問題①対応 - サムネイルロード失敗時のフォールバックロジック
                     if (isPreview && tile.thumb_url && img.src.includes(tile.thumb_url)) {
+                        // サムネイルのロードが失敗した場合、フル解像度で再試行する
                         console.warn(`サムネイルのロードに失敗: ${tile.thumb_url}. フル解像度で再試行します: ${tile.url}`);
-                        img.src = tile.url; // フル解像度で再試行
+                        img.src = tile.url; 
                     } else {
+                        // フル解像度も失敗した場合、ターゲットL*で単色タイルを描画
                         console.error(`タイル画像のロードに失敗: ${tile.url}`);
                         const grayValue = Math.round(tile.targetL * 2.55); 
                         ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
@@ -560,8 +563,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 };
                 
-                // ★ 修正点: 問題①対応 - isPreviewに応じてURLを切り替え
-                // (これはすでに正しいロジックでしたが、動作確認のため再確認)
+                // isPreviewフラグに応じてURLを切り替え
                 img.src = (isPreview && tile.thumb_url) ? tile.thumb_url : tile.url;
             });
             promises.push(p);
@@ -630,7 +632,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const t_download_start = performance.now(); // ★ タイマー開始 (F3)
 
-                // ( ... 変更なし: lightParams, scale, quality の取得 ... )
+                // ( ... lightParams, scale, quality の取得 ... )
                 const lightParams = {
                     blendOpacity: parseInt(blendRangeInput ? blendRangeInput.value : 30),
                     edgeOpacity: parseInt(edgeOpacityInput ? edgeOpacityInput.value : 30),
@@ -675,7 +677,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     timingLog.textContent += `\nJPEG変換 (F3): ${blobTime.toFixed(3)} 秒`;
                 }
 
-                // ( ... 変更なし: ファイルサイズチェックと警告 ... )
+                // ( ... ファイルサイズチェックと警告 ... )
                 const fileSizeMB = blob.size / 1024 / 1024;
                 const limitMB = 15;
                 if (fileSizeMB <= limitMB || !downloadWarningArea) {
@@ -692,7 +694,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = `エラー: 高画質版の生成またはダウンロードに失敗しました。 ${err.message}`;
                 console.error("Download failed:", err);
             } finally {
-                // ( ... 変更なし: 完了処理 ... )
+                // ( ... 完了処理 ... )
                 isGeneratingFullRes = false;
                 generateButton.disabled = false;
                 downloadButton.disabled = false;
@@ -701,13 +703,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ( ... 変更なし: 警告Yes/Noボタンのリスナー ... )
+    // ( ... 警告Yes/Noボタンのリスナー ... )
     if (warningYesButton) { /* ... */ }
     if (warningNoButton) { /* ... */ }
 
 });
 
-// ( ... 変更なし: 独立した downloadBlob 関数 ... )
+// ( ... 独立した downloadBlob 関数 ... )
 function downloadBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
