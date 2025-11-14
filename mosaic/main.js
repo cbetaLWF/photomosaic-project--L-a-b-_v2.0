@@ -112,7 +112,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     
     // ★ 変更点: 必須要素チェックに previewModeCheckbox を追加
-    if (!mainCanvas || !statusText || !generateButton || !mainImageInput || !tileSizeInput || !previewModeCheckbox) {
+    if (!mainCanvas || !statusText || !generateButton || !mainImageInput || !tileSizeInput || !previewModeCheckbox || !recommendationArea) {
         console.error("Initialization Error: One or more critical HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because critical elements (Canvas, Buttons, Status, Sliders) are missing from the HTML.</p>";
         return;
@@ -257,7 +257,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     generateButton.addEventListener('click', () => {
         if (!mainImage || !edgeCanvas) { /* ... */ return; }
         
-        // ★ 変更点: 高画質版の生成中は二重実行を防ぐ
         if (isGeneratingFullRes) {
             statusText.textContent = 'ステータス: 現在、高画質版を生成中です...';
             return;
@@ -410,7 +409,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
-                    // ( ... 変更なし: 明度補正、クロップ/反転ロジック ... )
+                    // ( ... 変更なし: 明度補正 ... )
                     let targetL = tile.targetL; 
                     let tileL = tile.tileL; 
                     if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -421,6 +420,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
                     ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
 
+                    // ★ 変更点: プレビューモードでもクロップ/反転を行う
+                    // (読み込む画像(img)が、プレビュー時は縮小版、高画質時は
+                    // フル解像度版になるだけで、描画ロジックは共通化できる)
                     const sWidth = img.naturalWidth;
                     const sHeight = img.naturalHeight;
                     const sSize = Math.min(sWidth, sHeight);
@@ -455,6 +457,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 img.onerror = () => {
                     // ★ 変更点: サムネイル(thumb_url)のロードに失敗したら、
                     // フル解像度(url)での再試行を試みる
+                    // (tile.thumb_url が存在するかどうかもチェック)
                     if (isPreview && tile.thumb_url && img.src.includes(tile.thumb_url)) {
                         console.warn(`サムネイルのロードに失敗: ${tile.thumb_url}. フル解像度で再試行します: ${tile.url}`);
                         img.src = tile.url; // フル解像度で再試行
