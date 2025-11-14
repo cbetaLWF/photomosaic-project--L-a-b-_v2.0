@@ -8,7 +8,7 @@ function f(t) {
 }
 
 function rgbToLab(r, g, b) {
-    // ( ... rgbToLab関数の内容は変更なし ... )
+    // 1. RGB to XYZ
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
@@ -16,6 +16,7 @@ function rgbToLab(r, g, b) {
     let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) * 100;
     let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 100;
     let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) * 100;
+    // 2. XYZ to L*a*b*
     let fx = f(x / REF_X); let fy = f(y / REF_Y); let fz = f(z / REF_Z);
     let l = (116 * fy) - 16; let a = 500 * (fx - fy); let b_star = 200 * (fy - fz);
     l = Math.max(0, Math.min(100, l));
@@ -136,7 +137,7 @@ async function analyzeImagePatterns(imageBitmap) {
             });
         }
     }
-    // ★ L*パターン(6種)を返す
+    // L*パターン(6種)を返す
     return patterns;
 }
 
