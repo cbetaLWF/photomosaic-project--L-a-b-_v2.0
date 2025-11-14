@@ -1,32 +1,4 @@
-// L*a*b*変換のための定数とヘルパー関数
-const REF_X = 95.047; // D65
-const REF_Y = 100.000;
-const REF_Z = 108.883;
-
-function f(t) {
-    return t > 0.008856 ? Math.pow(t, 1/3) : (7.787 * t) + (16 / 116);
-}
-
-function rgbToLab(r, g, b) {
-    // 1. RGB to XYZ
-    r /= 255; g /= 255; b /= 255;
-    r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
-    g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
-    b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
-    let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) * 100;
-    let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 100;
-    let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) * 100;
-    // 2. XYZ to L*a*b*
-    let fx = f(x / REF_X); let fy = f(y / REF_Y); let fz = f(z / REF_Z);
-    let l = (116 * fy) - 16; let a = 500 * (fx - fy); let b_star = 200 * (fy - fz);
-    l = Math.max(0, Math.min(100, l));
-    return { l: l, a: a, b_star: b_star };
-}
-
-// 平均RGBからL*値のみを返す簡易ヘルパー
-function getLstar(r, g, b) {
-    return rgbToLab(r, g, b).l;
-}
+// ... (L*a*b*関数などは変更なし) ...
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
@@ -39,7 +11,6 @@ self.onmessage = async (e) => {
     
     const results = [];
     
-    // ★ 変更点: 1:1 (正方形) のアスペクト比を定義
     const ASPECT_RATIO = 1.0; 
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); // = tileWidth
@@ -48,7 +19,6 @@ self.onmessage = async (e) => {
 
     self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
 
-    // このWorkerの担当ピクセル総数を計算 (進捗報告用)
     const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
     let processedRows = 0;
 
@@ -60,9 +30,7 @@ self.onmessage = async (e) => {
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
 
-            // ★ 変更点: 常に正方形のブロックを処理するようにする
-            // (画像の右端や下端で、幅と高さが異なってしまうのを防ぐ)
-            // (例: 20x15になった場合、15x15の正方形として処理)
+            // 常に正方形のブロックを処理する
             const currentSize = Math.min(currentBlockWidth, currentBlockHeight);
             
             // 3x3 L*ベクトル計算のための準備 (currentSize基準)
@@ -76,7 +44,7 @@ self.onmessage = async (e) => {
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             let pixelCountTotal = 0;
 
-            // ★ 変更点: currentSize (正方形) の範囲でブロックを走査
+            // currentSize (正方形) の範囲でブロックを走査
             for (let py = y; py < y + currentSize; py++) {
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                 for (let px = x; px < x + currentSize; px++) {
@@ -105,7 +73,6 @@ self.onmessage = async (e) => {
             let bestMatchUrl = null;
             let minDistance = Infinity;
             
-            // パラメータ (変更なし)
             const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
             const LOW_CHROMA_THRESHOLD = 25.0; 
             const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
@@ -157,8 +124,8 @@ self.onmessage = async (e) => {
                     patternType: bestMatch.type, // どの拡張パターンが選ばれたか
                     x: x,
                     y: y,
-                    width: currentSize, // ★ 変更点: 正方形の幅
-                    height: currentSize, // ★ 変更点: 正方形の高さ
+                    width: tileWidth, // ★ 変更点: currentSize -> tileWidth
+                    height: tileHeight, // ★ 変更点: currentSize -> tileHeight
                     targetL: targetLab.l, // ブロックのL*値
                     tileL: bestMatch.l // 選ばれた「パターン」のL*値
                 });
