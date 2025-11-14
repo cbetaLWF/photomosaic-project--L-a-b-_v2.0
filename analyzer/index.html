@@ -2,48 +2,59 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>タイル画像解析アプリ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>タイル画像解析 ＆ サムネイル生成アプリ</title>
+    <!-- JSZipライブラリ: ZIPファイル生成に必須 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        #drop-area { 
-            border: 2px dashed #ccc; 
-            padding: 50px; 
-            text-align: center; 
-            cursor: pointer;
-            margin-bottom: 20px;
-        }
-        #controls button {
-            padding: 10px 20px;
-            margin-right: 10px;
-        }
-        #log { 
-            margin-top: 20px; 
-            white-space: pre-wrap; 
-            background: #f4f4f4; 
-            padding: 15px; 
-            min-height: 150px; 
-            overflow-y: auto;
-            border-radius: 5px;
-            border: 1px solid #ddd;
+        body { font-family: 'Inter', sans-serif; }
+        #drop-area.active {
+            background-color: #e0f2fe; /* light-blue-100 */
+            border-color: #0284c7; /* light-blue-600 */
         }
     </style>
 </head>
-<body>
-    <h1>タイル画像解析 (Analyzer App)</h1>
-    <p>フォルダまたは画像ファイルをまとめてドラッグ＆ドロップしてください。解析後、JSONをダウンロードし、画像ファイルを /mosaic/tiles/ に移動させてください。</p>
-    
-    <div id="drop-area">
-        タイル画像をここにドラッグ＆ドロップ
+<body class="bg-gray-100 p-8">
+    <div class="max-w-3xl mx-auto bg-white p-8 rounded-lg shadow-lg">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4">タイル画像解析 ＆ サムネイル生成</h1>
+        <p class="text-gray-600 mb-6">
+            タイル画像をドラッグ＆ドロップすると、L*a*b*データ(JSON)と高速プレビュー用サムネイル(JPG)を解析・生成し、ZIPファイルとして一括ダウンロードします。
+        </p>
+
+        <div id="drop-area" class="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center cursor-pointer transition-colors duration-200 hover:border-blue-500">
+            <p class="text-gray-500">タイル画像 (JPG, PNG) をここにドラッグ＆ドロップ</p>
+        </div>
+
+        <!-- ★ 変更点: サムネイル設定UI -->
+        <div class="my-6 p-4 bg-gray-50 rounded-lg border">
+            <h3 class="text-lg font-semibold mb-2">サムネイル設定</h3>
+            <label for="thumbnail-quality" class="block text-sm font-medium text-gray-700">
+                サムネイル品質 (JPEG圧縮率): <span id="thumbnail-quality-value" class="font-bold">75</span>%
+            </label>
+            <input type="range" id="thumbnail-quality" min="10" max="100" value="75" class="w-full mt-1" oninput="document.getElementById('thumbnail-quality-value').textContent = this.value">
+            <p class="text-xs text-gray-500 mt-1">品質が低いほどファイルサイズは小さくなります。(固定サイズ: 100x100px)</p>
+        </div>
+        <!-- ★ 変更点ここまで -->
+
+        <div class="flex gap-4">
+            <button id="start-analysis" class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
+                解析開始
+            </button>
+            <!-- ★ 変更点: JSONダウンロード -> ZIPダウンロード -->
+            <button id="download-zip-button" class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed" disabled>
+                JSON と サムネイル (.zip) をダウンロード
+            </button>
+        </div>
+        
+        <div id="log-container" class="mt-6">
+            <label for="log" class="block text-sm font-medium text-gray-700">処理ログ:</label>
+            <div id="log" class="mt-1 w-full h-48 p-4 bg-gray-900 text-gray-200 text-sm font-mono rounded-md overflow-y-auto whitespace-pre-wrap">ステータス: 待機中...</div>
+        </div>
     </div>
 
-    <div id="controls">
-        <button id="start-analysis" disabled>解析開始</button>
-        <button id="download-json-button" disabled>JSONをダウンロード</button>
-    </div>
-
-    <div id="log">ログ: 解析を待機中...</div>
-
-    <!-- Workerスクリプトを読み込む (互換性維持のため worker.js を参照) -->
+    <!-- JSファイル -->
     <script src="analyzer.js"></script>
     <script src="worker.js"></script> 
 </body>
