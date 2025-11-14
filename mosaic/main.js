@@ -1,5 +1,4 @@
-// ★ 変更点: 線画抽出（Sobel）のためのヘルパー関数
-// (ピクセルデータ, 幅, 高さ) を受け取り、線画のピクセルデータを返す
+// ★ 変更点: 線画抽出（Sobel）を「黒い線 + 透明な背景」で生成する
 function applySobelFilter(imageData) {
     const width = imageData.width;
     const height = imageData.height;
@@ -13,7 +12,9 @@ function applySobelFilter(imageData) {
         grayscaleData[i / 4] = gray;
     }
 
+    // ★ 変更点: sobelDataを「透明」で初期化 (すべて0)
     const sobelData = new Uint8ClampedArray(data.length);
+    
     const Gx = [
         [-1, 0, 1],
         [-2, 0, 2],
@@ -24,6 +25,9 @@ function applySobelFilter(imageData) {
         [0, 0, 0],
         [1, 2, 1]
     ];
+    
+    // ★ 変更点: どの程度の強さのエッジを「線」とみなすかの閾値
+    const threshold = 30; // 0〜255 の間で調整可能
 
     // 2. Sobelフィルタ適用
     for (let y = 1; y < height - 1; y++) {
@@ -41,18 +45,17 @@ function applySobelFilter(imageData) {
             }
 
             const magnitude = Math.sqrt(sumX * sumX + sumY * sumY);
-            // 0-255の範囲にクランプ
-            const edgeValue = Math.min(255, magnitude); 
-
-            // 線画を「黒」で描画 (255 - edgeValue)
-            // 白背景(255)に黒い線(0)
-            const finalValue = 255 - edgeValue;
-            
             const i = (y * width + x) * 4;
-            sobelData[i] = finalValue;
-            sobelData[i + 1] = finalValue;
-            sobelData[i + 2] = finalValue;
-            sobelData[i + 3] = 255; // 不透明
+
+            // ★ 変更点: 閾値を超えたエッジのみを描画
+            if (magnitude > threshold) {
+                sobelData[i] = 0; // R (黒)
+                sobelData[i + 1] = 0; // G (黒)
+                sobelData[i + 2] = 0; // B (黒)
+                // エッジの強さに応じて不透明度を変える (より滑らかな線画に)
+                sobelData[i + 3] = Math.min(255, magnitude * 1.5); // A (不透明度)
+            }
+            // 閾値以下の場合、sobelDataは初期値[0,0,0,0] (透明) のまま
         }
     }
     return new ImageData(sobelData, width, height);
@@ -70,7 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const statusText = document.getElementById('status-text');
     const tileSizeInput = document.getElementById('tile-size');
     
-    // ★ 変更点: 両方のスライダーを取得
+    // 両方のスライダーを取得
     const blendRangeInput = document.getElementById('blend-range');
     const blendValue = document.getElementById('blend-value');
     const edgeOpacityInput = document.getElementById('edge-opacity-range');
@@ -81,15 +84,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
     
-    // ( ... 必須要素チェック ... )
-    if (!mainCanvas || !statusText || !generateButton) { /* ... */ }
+    // 全ての必須要素が存在するかチェック
+    if (!mainCanvas || !statusText || !generateButton || !blendRangeInput || !edgeOpacityInput) {
+        console.error("Initialization Error: One or more required HTML elements are missing.");
+        document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status, Sliders) are missing from the HTML.</p>";
+        return;
+    }
     
     const ctx = mainCanvas.getContext('2d');
     let tileData = null;
     let mainImage = null;
     let workers = [];
     
-    // ★ 変更点: 生成した線画を保持するCanvas
+    // 生成した線画を保持するCanvas
     let edgeCanvas = null;
 
 
@@ -97,10 +104,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
 
-    // ( ... スライダーのリスナー ... )
-    if (brightnessCompensationInput && brightnessCompensationValue) { /* ... */ }
-    if (textureWeightInput && textureWeightValue) { /* ... */ }
-    // ★ 変更点: 両方のスライダーのリスナー
+    // スライダーのリスナー
+    if (brightnessCompensationInput && brightnessCompensationValue) {
+        brightnessCompensationInput.addEventListener('input', () => {
+            brightnessCompensationValue.textContent = brightnessCompensationInput.value;
+        });
+    }
+    if (textureWeightInput && textureWeightValue) {
+        textureWeightInput.addEventListener('input', () => {
+            textureWeightValue.textContent = textureWeightInput.value;
+        });
+    }
     if (blendRangeInput && blendValue) {
         blendRangeInput.addEventListener('input', () => {
             blendValue.textContent = blendRangeInput.value;
@@ -114,15 +128,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 1. タイルデータの初期ロード ---
     try {
-        // ( ... 変更なし: JSONロードと6倍拡張(3x3)ベクトルのチェック ... )
         statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
-        if (!response.ok) { /* ... */ }
+        if (!response.ok) {
+            throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。Analyzer Appでデータを作成し、/mosaic/フォルダに配置してください。`);
+        }
         tileData = await response.json();
-        if (tileData.length === 0 || !tileData[0].patterns || tileData[0].patterns.length === 0 || !tileData[0].patterns[0].l_vector || tileData[0].patterns[0].l_vector.length !== 9) {
+        
+        // 6倍拡張(3x3)ベクトルのJSONチェック
+        if (tileData.length === 0 || 
+            !tileData[0].patterns || 
+            tileData[0].patterns.length === 0 || 
+            !tileData[0].patterns[0].l_vector ||
+            tileData[0].patterns[0].l_vector.length !== 9) {
              throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトルではありません。Analyzer Appで新しいデータを再生成してください。');
         }
-        statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * 6}パターン) ロード完了。メイン画像を選択してください。`;
+        
+        statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * (tileData[0].patterns ? tileData[0].patterns.length : 0)}パターン) ロード完了。メイン画像を選択してください。`;
         if (mainImageInput) mainImageInput.disabled = false;
     } catch (error) {
         statusText.textContent = `エラー: ${error.message}`;
@@ -132,7 +154,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // --- 2. メイン画像アップロード ---
     if (mainImageInput) {
-        // ( ... 変更なし: 画像をロードしてプレビューするだけ ... )
         mainImageInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -177,13 +198,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCtx.drawImage(mainImage, 0, 0);
         const imageData = tempCtx.getImageData(0, 0, mainImage.width, mainImage.height);
 
-        // ★ 変更点: Worker処理の「前に」線画抽出を実行
+        // Worker処理の「前に」線画抽出を実行
         statusText.textContent = 'ステータス: メイン画像の線画を抽出中...';
         const edgeImageData = applySobelFilter(imageData);
         // 抽出した線画をオフスクリーンCanvasに保持
         edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
         edgeCanvas.getContext('2d').putImageData(edgeImageData, 0, 0);
-        // ★ 変更点ここまで
 
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
@@ -191,9 +211,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         let finishedWorkers = 0;
         let allResults = [];
         
-        // ( ... チャンク分けロジック (変更なし) ... )
+        // チャンク分けロジック (タイル高さの倍数にアライン)
         const tileSize = parseInt(tileSizeInput.value);
-        const tileHeight = Math.round(tileSize * 1.0); 
+        const tileHeight = Math.round(tileSize * 1.0); // 正方形
+        if (tileHeight <= 0) {
+            statusText.textContent = 'エラー: タイルサイズは0より大きくしてください。';
+            generateButton.disabled = false;
+            return;
+        }
         const alignedHeight = Math.ceil(mainImage.height / tileHeight) * tileHeight;
         const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
         let startY = 0;
@@ -209,7 +234,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             workers.push(worker);
 
             worker.onmessage = (e) => {
-                // ( ... Workerからのメッセージ処理 (変更なし) ... )
                 if (e.data.type === 'status') {
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
                 } else if (e.data.type === 'progress') {
@@ -222,7 +246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (finishedWorkers === activeWorkers) {
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
                         progressBar.style.width = '100%';
-                        // ★ 変更点: renderMosaic に両方の値を渡す
+                        // renderMosaic に両方の値を渡す
                         renderMosaic(
                             allResults, 
                             mainImage.width, 
@@ -235,7 +259,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 }
             };
-            worker.onerror = (error) => { /* ... (変更なし) ... */ };
+            worker.onerror = (error) => {
+                statusText.textContent = `エラー: Worker ${i+1} で問題が発生しました。 ${error.message}`;
+                terminateWorkers();
+                generateButton.disabled = false;
+                console.error(`Worker ${i+1} Error:`, error);
+            };
 
             // Workerにデータを送信
             worker.postMessage({ 
@@ -244,7 +273,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 tileSize: tileSize,
                 width: mainImage.width,
                 height: mainImage.height,
-                // ★ 変更点: blendOpacityはWorkerに不要なので削除
+                // blendOpacityはWorkerに不要
                 brightnessCompensation: parseInt(brightnessCompensationInput.value),
                 textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                 startY: startY,
@@ -252,11 +281,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             startY += chunkHeight;
         }
-        if (activeWorkers === 0) { /* ... (変更なし) ... */ }
+
+        if (activeWorkers === 0 && mainImage.height > 0) {
+             statusText.textContent = 'ステータス: Workerを起動できませんでした。';
+             generateButton.disabled = false;
+        }
     });
 
     // --- 4. 最終的なモザイクの描画 ---
-    // (★ 変更点: 線画オーバーレイロジックを追加)
     async function renderMosaic(results, width, height, blendOpacity, edgeOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
@@ -278,7 +310,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const brightnessFactor = brightnessCompensation / 100; 
 
         for (const tile of results) {
-            // ( ... 変更なし: タイルのロードと正方形クロップ/反転描画 ... )
+            // タイルのロードと正方形クロップ/反転描画
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
@@ -323,7 +355,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     loadedCount++;
                     resolve();
                 };
-                img.onerror = () => { /* ... (変更なし) ... */ resolve(); };
+                img.onerror = () => {
+                    console.error(`タイル画像のロードに失敗: ${tile.url}`);
+                    const grayValue = Math.round(tile.targetL * 2.55); 
+                    ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
+                    ctx.fillRect(tile.x, tile.y, tile.width, tile.height);
+                    loadedCount++;
+                    resolve(); 
+                };
                 img.src = tile.url; 
             });
             promises.push(p);
@@ -338,16 +377,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // --- ★ 変更点: 2段階のブレンド処理 ---
 
-        // 1. 従来の「陰影」ブレンド (Multiply)
+        // 1. 「陰影」ブレンド (Soft Light)
         if (blendOpacity > 0) {
-            ctx.globalCompositeOperation = 'soft-light'; // 'multiply' から変更
+            ctx.globalCompositeOperation = 'soft-light'; 
             ctx.globalAlpha = blendOpacity / 100;
             ctx.drawImage(mainImage, 0, 0, width, height);
         }
 
-        // 2. 新しい「線画」ブレンド (Soft Light)
+        // 2. 「線画」ブレンド (Multiply)
+        // 「黒い線 + 透明な背景」を重ねる
         if (edgeOpacity > 0 && edgeCanvas) {
-            ctx.globalCompositeOperation = 'soft-light'; 
+            ctx.globalCompositeOperation = 'multiply'; 
             ctx.globalAlpha = edgeOpacity / 100;
             ctx.drawImage(edgeCanvas, 0, 0, width, height);
         }
@@ -364,7 +404,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 5. ダウンロード機能 (PNG形式) ---
     downloadButton.addEventListener('click', () => {
-        // ( ... 変更なし ... )
+        const dataURL = mainCanvas.toDataURL('image/png'); 
+        const a = document.createElement('a');
+        a.href = dataURL;
+        a.download = `photomosaic-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     });
 });
-
