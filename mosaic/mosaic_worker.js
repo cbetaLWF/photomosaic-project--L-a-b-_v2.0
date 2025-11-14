@@ -8,7 +8,7 @@ function f(t) {
 }
 
 function rgbToLab(r, g, b) {
-    // ( ... rgbToLab関数の内容は変更なし ... )
+    // 1. RGB to XYZ
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
@@ -16,6 +16,7 @@ function rgbToLab(r, g, b) {
     let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) * 100;
     let y = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 100;
     let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) * 100;
+    // 2. XYZ to L*a*b*
     let fx = f(x / REF_X); let fy = f(y / REF_Y); let fz = f(z / REF_Z);
     let l = (116 * fy) - 16; let a = 500 * (fx - fy); let b_star = 200 * (fy - fz);
     l = Math.max(0, Math.min(100, l));
@@ -38,8 +39,7 @@ self.onmessage = async (e) => {
     
     const results = [];
     
-    // ★ 変更点: 16:9 -> 1:1 (正方形)
-    // これが横長のタイルが描画されていた根本原因です
+    // ★ 変更点: 1:1 (正方形) のアスペクト比を定義
     const ASPECT_RATIO = 1.0; 
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); // = tileWidth
@@ -56,25 +56,30 @@ self.onmessage = async (e) => {
     for (let y = startY; y < endY; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
-            // ターゲットブロックのサイズ (ほぼ正方形になる)
+            // ターゲットブロックのサイズ
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
+
+            // ★ 変更点: 常に正方形のブロックを処理するようにする
+            // (画像の右端や下端で、幅と高さが異なってしまうのを防ぐ)
+            // (例: 20x15になった場合、15x15の正方形として処理)
+            const currentSize = Math.min(currentBlockWidth, currentBlockHeight);
             
-            // 3x3 L*ベクトル計算のための準備
-            const oneThirdX = x + Math.floor(currentBlockWidth / 3);
-            const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
-            const oneThirdY = y + Math.floor(currentBlockHeight / 3);
-            const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
+            // 3x3 L*ベクトル計算のための準備 (currentSize基準)
+            const oneThirdX = x + Math.floor(currentSize / 3);
+            const twoThirdsX = x + Math.floor(currentSize * 2 / 3);
+            const oneThirdY = y + Math.floor(currentSize / 3);
+            const twoThirdsY = y + Math.floor(currentSize * 2 / 3);
 
             const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
             
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             let pixelCountTotal = 0;
 
-            // ★ 変更点: ブロック走査 (currentBlockHeight は正方形)
-            for (let py = y; py < y + currentBlockHeight; py++) {
+            // ★ 変更点: currentSize (正方形) の範囲でブロックを走査
+            for (let py = y; py < y + currentSize; py++) {
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
-                for (let px = x; px < x + currentBlockWidth; px++) {
+                for (let px = x; px < x + currentSize; px++) {
                     const i = (py * width + px) * 4;
                     const r = imageData.data[i]; const g = imageData.data[i + 1]; const b = imageData.data[i + 2];
                     r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
@@ -100,6 +105,7 @@ self.onmessage = async (e) => {
             let bestMatchUrl = null;
             let minDistance = Infinity;
             
+            // パラメータ (変更なし)
             const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
             const LOW_CHROMA_THRESHOLD = 25.0; 
             const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
@@ -110,7 +116,8 @@ self.onmessage = async (e) => {
             // 6倍拡張に対応したネストループ
             for (const tile of tileData) {
                 for (const pattern of tile.patterns) {
-                    // ( ... 色距離(colorDistance)の計算 ... )
+                    
+                    // --- 1. 色距離 (Color Distance) の計算 ---
                     const dL = targetLab.l - pattern.l;
                     const dA = targetLab.a - pattern.a;
                     const dB = targetLab.b_star - pattern.b_star;
@@ -121,7 +128,7 @@ self.onmessage = async (e) => {
                     const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
                     const colorDistance = baseColorDistance + chromaPenalty;
 
-                    // ( ... 3x3 L*ベクトル距離(textureDistance)の計算 ... )
+                    // --- 2. 3x3 L*ベクトル距離 (Texture Distance) の計算 ---
                     let textureDistanceSquared = 0;
                     for (let k = 0; k < 9; k++) {
                         const diff = target_l_vector[k] - pattern.l_vector[k];
@@ -129,7 +136,7 @@ self.onmessage = async (e) => {
                     }
                     const textureDistance = Math.sqrt(textureDistanceSquared);
 
-                    // ( ... 最終距離(totalDistance)の計算 ... )
+                    // --- 3. 最終距離(totalDistance)の計算 ---
                     let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
                     const count = usageCount.get(pattern.l_vector) || 0; 
                     const fairnessPenalty = count * 0.5; 
@@ -150,8 +157,8 @@ self.onmessage = async (e) => {
                     patternType: bestMatch.type, // どの拡張パターンが選ばれたか
                     x: x,
                     y: y,
-                    width: currentBlockWidth, // 正方形の幅
-                    height: currentBlockHeight, // 正方形の高さ
+                    width: currentSize, // ★ 変更点: 正方形の幅
+                    height: currentSize, // ★ 変更点: 正方形の高さ
                     targetL: targetLab.l, // ブロックのL*値
                     tileL: bestMatch.l // 選ばれた「パターン」のL*値
                 });
