@@ -2,21 +2,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     // UI要素の取得
     const mainImageInput = document.getElementById('main-image-input');
     const generateButton = document.getElementById('generate-button');
-    // ... (他のUI要素取得は変更なし) ...
+    const downloadButton = document.getElementById('download-button');
+    const mainCanvas = document.getElementById('main-canvas');
+    const progressBar = document.getElementById('progress-fill');
+    const statusText = document.getElementById('status-text');
+    const tileSizeInput = document.getElementById('tile-size');
+    const blendRangeInput = document.getElementById('blend-range');
+    const brightnessCompensationInput = document.getElementById('brightness-compensation');
+    const brightnessCompensationValue = document.getElementById('brightness-compensation-value');
+    
+    // ★ 修正点: 以下の2行が欠落していたのを修正
+    const textureWeightInput = document.getElementById('texture-weight');
     const textureWeightValue = document.getElementById('texture-weight-value');
-
-    // ( ... 必須要素チェックは変更なし ... )
+    
+    // 全ての必須要素が存在するかチェック
+    if (!mainCanvas || !statusText || !generateButton) {
+        console.error("Initialization Error: One or more required HTML elements are missing.");
+        document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because required elements (Canvas, Buttons, Status) are missing from the HTML.</p>";
+        return;
+    }
     
     const ctx = mainCanvas.getContext('2d');
     let tileData = null;
     let mainImage = null;
+
+    // ★ 変更点: 起動したWorkerを管理するための配列
     let workers = [];
 
-    // --- UIの初期設定 --- (変更なし)
+    // --- UIの初期設定 ---
     generateButton.disabled = true;
     downloadButton.style.display = 'none';
 
-    // ( ... スライダーの値表示リスナーは変更なし ... )
+    // 明度補正スライダーの値表示を更新
+    if (brightnessCompensationInput && brightnessCompensationValue) {
+        brightnessCompensationInput.addEventListener('input', () => {
+            brightnessCompensationValue.textContent = brightnessCompensationInput.value;
+        });
+    }
+    // テクスチャ重視度スライダーの値表示を更新
+    if (textureWeightInput && textureWeightValue) {
+        textureWeightInput.addEventListener('input', () => {
+            textureWeightValue.textContent = textureWeightInput.value;
+        });
+    }
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -27,7 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileData = await response.json();
         
-        // ★ 変更点: 新しいJSON構造 (patterns配列) をチェック
+        // 新しいJSON構造 (patterns配列) をチェック
         if (tileData.length === 0 || 
             !tileData[0].patterns || 
             tileData[0].patterns.length === 0 || 
@@ -44,12 +72,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     
-    // --- 2. メイン画像アップロード --- (変更なし)
+    // --- 2. メイン画像アップロード ---
     if (mainImageInput) {
-        // ( ... 変更なし ... )
+        mainImageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                mainImage = new Image();
+                mainImage.onload = () => {
+                    generateButton.disabled = false;
+                    downloadButton.style.display = 'none';
+
+                    // Canvasのサイズをメイン画像に合わせる
+                    mainCanvas.width = mainImage.width;
+                    mainCanvas.height = mainImage.height;
+                    
+                    ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+                    ctx.drawImage(mainImage, 0, 0); // プレビュー表示
+                    statusText.textContent = `ステータス: 画像ロード完了 (${mainImage.width}x${mainImage.height})。生成ボタンを押してください。`;
+                };
+                mainImage.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
     }
 
-    // ★ 変更点: 起動中の全Workerを強制終了するヘルパー関数
+    // 起動中の全Workerを強制終了するヘルパー関数
     function terminateWorkers() {
         workers.forEach(w => w.terminate());
         workers = [];
@@ -57,7 +107,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
     // --- 3. モザイク生成開始 (並列化ロジック) ---
-    // (★ この関数全体は、前回実装した並列化ロジックから変更なし)
     generateButton.addEventListener('click', () => {
         if (!mainImage) return;
         
@@ -93,6 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Workerからのメッセージ受信
             worker.onmessage = (e) => {
                 if (e.data.type === 'status') {
+                    // 複数のWorkerからステータスが送られるため、(Worker i) のように区別する
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
                 
                 } else if (e.data.type === 'progress') {
@@ -151,8 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // --- 4. 最終的なモザイクの描画 --- 
-    // (★ 前回から変更なし)
+    // --- 4. 最終的なモザイクの描画 ---
     async function renderMosaic(results, width, height, blendOpacity, brightnessCompensation) {
         statusText.textContent = 'ステータス: タイル画像を読み込み、描画中...';
         mainCanvas.width = width;
@@ -171,7 +220,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const p = new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
-                    // ★ 変更点: tile.l -> tile.tileL に変更 (workerからの返却値に合わせる)
                     let targetL = tile.targetL; 
                     let tileL = tile.tileL; 
                     if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -208,7 +256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
 
 
-        // --- ブレンド処理 --- (変更なし)
+        // --- ブレンド処理 ---
         if (blendOpacity > 0) {
             ctx.globalCompositeOperation = 'multiply'; 
             ctx.globalAlpha = blendOpacity / 100;
@@ -222,8 +270,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         downloadButton.style.display = 'block';
     }
 
-    // --- 5. ダウンロード機能 (PNG形式) --- (変更なし)
+    // --- 5. ダウンロード機能 (PNG形式) ---
     downloadButton.addEventListener('click', () => {
-        // ( ... 変更なし ... )
+        // PNG形式 (ロスレス) でダウンロード
+        const dataURL = mainCanvas.toDataURL('image/png'); 
+        const a = document.createElement('a');
+        a.href = dataURL;
+        a.download = `photomosaic-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     });
 });
