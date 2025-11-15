@@ -473,7 +473,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             startY += chunkHeight;
         }
-        if (activeWorkers === 0 && mainImage.height > 0) { /* ... (変更なし) ... */ }
+        if (activeWorkers === 0 && mainImage.height > 0) { /* ... */ }
     });
 
     // --- 4. 最終的なモザイクの描画 ---
@@ -682,12 +682,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = 'ステータス: 高画質版をJPEGに変換中...';
 
                 // 3. CanvasからJPEG Blobを生成
+                // ★★★ ここに手動計測コードを一時的に追加 ★★★
+                const t_encode_start = performance.now(); // ★ ここで計測開始
+
                 const blob = await highResCanvas.convertToBlob({
                     type: 'image/jpeg',
                     quality: quality
                 });
+
+                const t_encode_end = performance.now(); // ★ ここで計測終了
+                console.log(`[手動計測] JPEGエンコード時間: ${(t_encode_end - t_encode_start) / 1000.0} 秒`); // ★ 結果をコンソールに出力
+                // ★★★ 修正終わり ★★★
                 
-                const t_download_blob_end = performance.now(); // ★ タイマー (F3 完了)
+                const t_download_blob_end = performance.now(); // ★ 元の計測はそのまま
                 
                 // ★ 変更点: フェーズ3（ダウンロード）の時間計測
                 const downloadRenderTime = (t_download_render_end - t_download_start) / 1000.0;
