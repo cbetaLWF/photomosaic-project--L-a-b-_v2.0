@@ -190,7 +190,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // ★ 修正: スプライトシート用のグローバル変数
     let thumbSheetImage = null; // F2 (プレビュー) 用のスプライトシート (Image)
-    let fullSheetBitmaps = []; // F3 (ダウンロード) 用のスプライトシート (ImageBitmap)
+    // let fullSheetBitmaps = []; // F3はWorkerに移行したため、メインスレッドでの保持は不要
 
     let isPreviewRender = true;
     let t_worker_start = 0;
@@ -494,9 +494,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
     // ★★★ 修正点: スプライトシート戦略に基づく F2 描画ロジック ★★★
-    // この関数は now async ではなく、高速な同期的描画（スプライトシートがロード済みのため）です。
     // I/Oボトルネック (99秒) はここで解決されます。
-    function renderMosaic(
+    // F2 (Thumb) 描画は非同期チャンク描画 (17秒) ではなく、同期描画 (0.1秒) に戻します
+    
+    // (F2/F3-A共通の並列ロード制御キュー - 削除)
+    // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
+    
+    async function renderMosaic(
         targetCanvas, 
         results, // F1 (Worker) からの { tileId, patternType, x, y, ... } 配列
         width, height,
@@ -504,6 +508,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         scale = 1.0 
     ) {
         
+        isPreviewRender = true; // この関数はF2プレビュー専用
+
         const t_render_start = performance.now(); // ★ タイマー開始 (F2)
 
         const canvasWidth = width * scale;
@@ -677,22 +683,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
-                statusText.textContent = 'ステータス: 高画質スプライトシートをロード中...';
-
-                // ★ 修正: F3用スプライトシートを全てロードし、ImageBitmap配列を作成
-                const fullSet = tileData.tileSets.full;
-                const sheetPromises = fullSet.sheetUrls.map(url => 
-                    fetch(url)
-                    .then(res => {
-                        if (!res.ok) throw new Error(`Failed to fetch ${url}`);
-                        return res.blob();
-                    })
-                    .then(blob => createImageBitmap(blob))
-                );
-                // fullSheetBitmaps に F3用 ImageBitmap が配列で格納される
-                fullSheetBitmaps = await Promise.all(sheetPromises);
-
                 statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
+
+                // ★★★ 修正点: F3スプライトシートのロード処理をメインスレッドから削除 ★★★
+                // (ロードは F3 Worker 内で行う)
+                // fullSheetBitmaps = await Promise.all(sheetPromises); // 140秒フリーズの原因
 
                 // Workerのパスが正しいことを前提に、F3 Workerを起動
                 const downloadWorker = new Worker('./download_worker.js'); 
@@ -703,7 +698,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (timingLog) {
                                 // Workerから時間データを受信
                                 timingLog.textContent += `\nWorker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                timingLog.textContent += `\nWorker 描画 (F3-A): ${e.data.renderTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\nWorker スプライトロード (F3-A1): ${e.data.loadTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\nWorker 描画 (F3-A2): ${e.data.renderTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\nWorker エンコード (F3-B): ${e.data.encodeTime.toFixed(3)} 秒`;
                             }
                             // ★ 修正点: ArrayBufferを受信し、Blobに再構築
@@ -715,24 +711,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         downloadWorker.terminate();
                         mainImageBitmap.close(); // 転送後のクリーンアップ
                         if (edgeImageBitmap) edgeImageBitmap.close();
-                        // F3スプライトシートのBitmapもクリーンアップ
-                        fullSheetBitmaps.forEach(bmp => bmp.close());
-                        fullSheetBitmaps = [];
                     };
                     downloadWorker.onerror = (error) => {
                         reject(new Error(`Worker error: ${error.message}`));
                         downloadWorker.terminate();
                         mainImageBitmap.close();
                         if (edgeImageBitmap) edgeImageBitmap.close();
-                        fullSheetBitmaps.forEach(bmp => bmp.close());
-                        fullSheetBitmaps = [];
                     };
                     
                     // Workerに全データとWorker内で実行する描画関数を渡す
                     downloadWorker.postMessage({
                         tileData: tileData, // ★ 修正: JSON全体を渡す
                         cachedResults: cachedResults,
-                        fullSheetBitmaps: fullSheetBitmaps, // ★ 修正: ImageBitmapの配列を転送
+                        // fullSheetBitmaps: fullSheetBitmaps, // ★ 修正: ロード済みBitmapではなく、JSONを渡す
                         mainImageBitmap: mainImageBitmap, // ImageBitmapを転送
                         edgeImageBitmap: edgeImageBitmap,
                         width: mainImage.width,
@@ -740,7 +731,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         lightParams: lightParams,
                         scale: scale,
                         quality: quality
-                    }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), ...fullSheetBitmaps]); // 転送リスト
+                    }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); // 転送リスト
                 });
                 
                 const blob = await workerPromise;
