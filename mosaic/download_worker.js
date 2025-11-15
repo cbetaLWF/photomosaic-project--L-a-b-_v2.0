@@ -1,7 +1,7 @@
 // download_worker.js
 // F3処理（高解像度描画 + JPEGエンコード）を完全に実行するWorker
 
-// F2/F3-A共通の並列ロード制御キュー
+// F2で成功したI/Oスロットリング回避ロジックをWorkerにも実装します。
 async function runBatchedLoads(tilePromises, maxConcurrency) {
     const running = [];
 
@@ -51,17 +51,16 @@ async function renderMosaicWorker(
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
     ctx.clip(); 
 
-    // ★ 修正点1: 同時実行数の上限を定義
-    const MAX_CONCURRENT_REQUESTS = 50; 
-    const tilePromises = [];
+    // ★★★ 修正点: F2で成功したチャンク描画ロジックを移植 ★★★
+    const totalTiles = results.length;
+    const CHUNK_SIZE = 50; 
     
-    const MIN_TILE_L = 5.0; 
-    const MAX_BRIGHTNESS_RATIO = 5.0; 
-    const brightnessFactor = lightParams.brightnessCompensation / 100; 
+    // I/Oの並列実行制御: F3 Workerではfetchを使うため、MAX_CONCURRENT_REQUESTSで制限します
+    const MAX_CONCURRENT_REQUESTS = 50; 
+    const tilePromises = []; // ロードと描画を含むPromiseを格納する配列
 
-    // ★ 修正点2: Promiseを配列に追加するだけに変更
+    // ★ 描画処理をPromiseでキューに追加し、その後 runBatchedLoads で実行を制御
     for (const tile of results) {
-        // 各タイルのロードと描画をPromiseでラップ
         const p = (async () => {
             let tileBitmap = null;
             let finalUrl = tile.url; 
@@ -130,16 +129,17 @@ async function renderMosaicWorker(
                 if (tileBitmap) tileBitmap.close();
             }
         })(); 
-        tilePromises.push(p); // Promiseをキューに追加
+        tilePromises.push(p); 
     }
 
-    // ★ 修正点3: 全てのPromiseを並列制御キューで実行
+    // ★ 修正点3: F3-AのI/Oを並列制御キューで実行
     await runBatchedLoads(tilePromises, MAX_CONCURRENT_REQUESTS); 
+    // ★★★ 修正点ここまで ★★★
     
     const t_render_end = performance.now();
 
     ctx.restore(); // クリッピングを解除
-    
+
     // 2段階ブレンド処理 (WorkerではImageBitmapに対して実行)
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
