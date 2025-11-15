@@ -42,15 +42,15 @@ async function resizeImage(imageBitmap, targetWidth, targetHeight) {
 }
 
 
-// ★ 修正: L*a*b*解析ロジック (リサイズされたBitmap (例: 320x180) を入力とする)
-async function analyzeImagePatterns(imageBitmap) { // (例: 320x180)
+// ★ 修正: L*a*b*解析ロジック (リサイズされたBitmap (例: 160x90) を入力とする)
+async function analyzeImagePatterns(imageBitmap) { // (例: 160x90)
     const patterns = [];
 
     const baseWidth = imageBitmap.width;
     const baseHeight = imageBitmap.height;
     
     // 1. クロップ設定 (短辺に合わせた正方形)
-    const sSize = Math.min(baseWidth, baseHeight); // (例: 180)
+    const sSize = Math.min(baseWidth, baseHeight); // (例: 90)
     const isHorizontal = baseWidth > baseHeight; 
 
     const cropSettings = isHorizontal ? [
@@ -134,28 +134,32 @@ async function analyzeImagePatterns(imageBitmap) { // (例: 320x180)
 
 // ★★★ メイン処理: スプライトシート戦略 ★★★
 self.onmessage = async (e) => {
-    const { files, thumbnailQuality, thumbnailSize } = e.data; // thumbnailSize (F2) を 320x180 の幅(320)として流用
+    // thumbnailSize (F2) は 160x90 の幅(160)として流用
+    const { files, thumbnailQuality, thumbnailSize } = e.data; 
     
     // 0. スプライトシート定義
-    const F2_WIDTH = 320;
-    const F2_HEIGHT = 180;
-    const F3_WIDTH = 1280;
-    const F3_HEIGHT = 720;
+    // ★★★ 修正点: F2/F3の解像度を 1/4 に削減 ★★★
+    const F2_WIDTH = 160;
+    const F2_HEIGHT = 90;
+    const F3_WIDTH = 640;
+    const F3_HEIGHT = 360;
+    // ★★★ 修正点ここまで ★★★
+    
     const MAX_SHEET_WIDTH = 4096; // 4Kテクスチャ上限 (安全マージン)
 
     // F2 (Thumb) スプライトシートの計算 (500枚)
-    const F2_COLS = Math.floor(MAX_SHEET_WIDTH / F2_WIDTH); // 4096 / 320 = 12
-    const F2_ROWS = Math.ceil(files.length / F2_COLS);    // 500 / 12 = 42
-    const F2_SHEET_WIDTH = F2_COLS * F2_WIDTH;             // 12 * 320 = 3840
-    const F2_SHEET_HEIGHT = F2_ROWS * F2_HEIGHT;           // 42 * 180 = 7560
+    const F2_COLS = Math.floor(MAX_SHEET_WIDTH / F2_WIDTH); // 4096 / 160 = 25
+    const F2_ROWS = Math.ceil(files.length / F2_COLS);    // 500 / 25 = 20
+    const F2_SHEET_WIDTH = F2_COLS * F2_WIDTH;             // 25 * 160 = 4000
+    const F2_SHEET_HEIGHT = F2_ROWS * F2_HEIGHT;           // 20 * 90 = 1800
     
     // F3 (Full) スプライトシートの計算 (500枚)
-    const F3_COLS = Math.floor(MAX_SHEET_WIDTH / F3_WIDTH); // 4096 / 1280 = 3
-    const F3_ROWS_PER_SHEET = Math.floor(MAX_SHEET_WIDTH / F3_HEIGHT); // 4096 / 720 = 5
-    const F3_TILES_PER_SHEET = F3_COLS * F3_ROWS_PER_SHEET; // 3 * 5 = 15
-    const F3_SHEET_COUNT = Math.ceil(files.length / F3_TILES_PER_SHEET); // 500 / 15 = 34
-    const F3_SHEET_WIDTH = F3_COLS * F3_WIDTH;             // 3 * 1280 = 3840
-    const F3_SHEET_HEIGHT = F3_ROWS_PER_SHEET * F3_HEIGHT;   // 5 * 720 = 3600
+    const F3_COLS = Math.floor(MAX_SHEET_WIDTH / F3_WIDTH); // 4096 / 640 = 6
+    const F3_ROWS_PER_SHEET = Math.floor(MAX_SHEET_WIDTH / F3_HEIGHT); // 4096 / 360 = 11
+    const F3_TILES_PER_SHEET = F3_COLS * F3_ROWS_PER_SHEET; // 6 * 11 = 66
+    const F3_SHEET_COUNT = Math.ceil(files.length / F3_TILES_PER_SHEET); // 500 / 66 = 8
+    const F3_SHEET_WIDTH = F3_COLS * F3_WIDTH;             // 6 * 640 = 3840
+    const F3_SHEET_HEIGHT = F3_ROWS_PER_SHEET * F3_HEIGHT;   // 11 * 360 = 3960
 
     // 1. JSONデータ構造の初期化
     const jsonOutput = {
@@ -203,7 +207,7 @@ self.onmessage = async (e) => {
             const originalBitmap = await createImageBitmap(file);
 
             // --- F2/F1処理 ---
-            // F2用 (320x180) にリサイズ
+            // F2用 (160x90) にリサイズ
             const f2_bitmap = await resizeImage(originalBitmap, F2_WIDTH, F2_HEIGHT);
             
             // F1用 (L*ベクトル解析)
@@ -215,7 +219,7 @@ self.onmessage = async (e) => {
             f2_ctx.drawImage(f2_bitmap, f2_x, f2_y);
 
             // --- F3処理 ---
-            // F3用 (1280x720) にリサイズ
+            // F3用 (640x360) にリサイズ
             const f3_bitmap = await resizeImage(originalBitmap, F3_WIDTH, F3_HEIGHT);
             
             // F3スプライトシートに描画
