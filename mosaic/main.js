@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: main.js
+fullContent:
 // 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
     const width = imageData.width;
@@ -186,20 +190,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     const ctx = mainCanvas.getContext('2d');
     let tileData = null; // ★ 構造変更: { tileSets: ..., tiles: [...] }
-    let mainImage = null;
-    let workers = [];
-    let edgeCanvas = null; 
+    let mainImage = null; // ★ 修正: 元画像(Image)を保持
+    let workers = []; // F1 (計算) Worker用
+    let edgeCanvas = null; // ★ 修正: 線画(OffscreenCanvas)を保持
     let currentRecommendations = null;
     let cachedResults = null; // ★ 構造変更: [ { tileId: 0, patternType: "...", x: 0, y: 0, ... }, ... ]
     let lastHeavyParams = {}; 
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     
-    // ★ 修正: スプライトシート用のグローバル変数
-    let thumbSheetImage = null; // F2 (プレビュー) 用のスプライトシート (Image)
+    // ★ 修正: F2プレビュー用のスプライトシート (Image)
+    let thumbSheetImage = null; 
     // let fullSheetBitmaps = []; // F3はWorkerに移行したため、メインスレッドでの保持は不要
 
-    let isPreviewRender = true;
+    // ★ 修正: F2実行中フラグ
+    let isGeneratingPreview = false;
+    
     let t_worker_start = 0;
 
 
@@ -230,6 +236,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         thumbSheetImage.onload = () => {
             statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
             if (mainImageInput) mainImageInput.disabled = false;
+            
+            // ★ 修正: この時点でImageBitmapに変換しておく (F2 Workerへの転送準備)
+            // createImageBitmap(thumbSheetImage)
+            //     .then(bitmap => {
+            //         thumbSheetBitmap = bitmap;
+            //         statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
+            //         if (mainImageInput) mainImageInput.disabled = false;
+            //     })
+            //     .catch(err => {
+            //         statusText.textContent = `エラー: プレビューBitmapの作成に失敗: ${err.message}`;
+            //     });
+            // → やはりF2 Worker起動のたびにBitmapを都度作成（転送）する方が、
+            //   メインスレッドのメモリ管理が単純になるため、グローバル保持はしない。
         };
         thumbSheetImage.onerror = () => {
             statusText.textContent = `エラー: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) のロードに失敗しました。`;
@@ -250,6 +269,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (event) => {
+                
+                // ★ 修正: 古いBitmapをクリーンアップ
+                // (mainImage は Imageオブジェクトなので .close() はない)
+                // (edgeCanvas は OffscreenCanvas なので .close() はない)
+                
                 mainImage = new Image();
                 mainImage.onload = () => {
                     cachedResults = null;
@@ -259,7 +283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     mainCanvas.width = mainImage.width;
                     mainCanvas.height = mainImage.height;
                     
-                    // Canvasを元画像でリセット (Worker準備のため)
+                    // Canvasを元画像でリセット
                     ctx.clearRect(0, 0, mainImage.width, mainImage.height); 
                     ctx.drawImage(mainImage, 0, 0); 
                     
@@ -278,8 +302,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                             const recommendations = analyzeImageAndGetRecommendations(mainImage, analysisImageData);
                             currentRecommendations = recommendations; 
                             statusText.textContent = `ステータス: フルサイズの線画を事前計算中...`;
+                            
+                            // ★ 修正: ここでフルサイズのImageDataを取得
                             const fullImageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
                             const fullEdgeResult = applySobelFilter(fullImageData);
+                            
+                            // ★ 修正: edgeCanvas (OffscreenCanvas) を保持
                             edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
                             edgeCanvas.getContext('2d').putImageData(fullEdgeResult.finalEdgeImageData, 0, 0);
                             
@@ -303,40 +331,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ★ 修正点: 問題②対応 - applyRecommendationsButton リスナーの実装
+    // ( ... applyRecommendationsButton リスナー (変更なし) ... )
     if (applyRecommendationsButton) {
         applyRecommendationsButton.addEventListener('click', () => {
             if (!currentRecommendations) return;
             
             // 1. タイル幅 (number input)
             if (tileSizeInput) tileSizeInput.value = currentRecommendations.tileSize;
-
             // 2. L*明度補正 (range slider)
             if (brightnessCompensationInput) {
                 brightnessCompensationInput.value = currentRecommendations.brightnessCompensation;
                 if (brightnessCompensationValue) brightnessCompensationValue.textContent = currentRecommendations.brightnessCompensation;
             }
-
             // 3. テクスチャ重視度 (range slider)
             if (textureWeightInput) {
                 textureWeightInput.value = currentRecommendations.textureWeight;
                 if (textureWeightValue) textureWeightValue.textContent = currentRecommendations.textureWeight;
             }
-
             // 4. ブレンド度 (range slider)
             if (blendRangeInput) {
                 blendRangeInput.value = currentRecommendations.blendRange;
                 if (blendValue) blendValue.textContent = currentRecommendations.blendRange;
             }
-
             // 5. 線画の強さ (range slider)
             if (edgeOpacityInput) {
                 edgeOpacityInput.value = currentRecommendations.edgeOpacity;
                 if (edgeOpacityValue) edgeOpacityValue.textContent = currentRecommendations.edgeOpacity;
             }
-
             statusText.textContent = 'ステータス: 推奨パラメータを適用しました。';
-            // ヘビーパラメータ（タイルサイズ、テクスチャ）が変わった可能性があるのでキャッシュをクリア
             cachedResults = null;
             lastHeavyParams = {};
             generateButton.disabled = false;
@@ -348,40 +370,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         workers = [];
     }
     
-    // ★★★ 修正点: F3 プリロード (バックグラウンド・ロード) 戦略 ★★★
+    // ( ... F3 プリロード (バックグラウンド・ロード) 戦略 (変更なし) ... )
     
-    // (F2/F3-A共通の並列ロード制御キュー)
-    // (F2(Thumb)は1枚しかロードしないため、F3プリロード/ダウンロード専用)
     async function runBatchedLoads(loadPromises, maxConcurrency) {
         const running = [];
-        const results = []; // プリロードの結果を保持（デバッグ用だが、ここでは使わない）
-
+        const results = []; 
         for (const loadPromise of loadPromises) {
-            // 実行中の配列に新しいPromiseを追加
-            // loadPromiseは fetch() を返す関数
             const p = loadPromise().then(result => {
-                // Promiseが解決したら、実行中の配列から自身を削除
                 running.splice(running.indexOf(p), 1);
                 results.push(result);
                 return result;
             });
-
             running.push(p);
-
-            // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
             if (running.length >= maxConcurrency) {
                 await Promise.race(running);
             }
         }
-        // 残りのすべてのPromiseが完了するのを待つ
         return Promise.all(running);
     }
     
     let preloadPromise = null;
     
     function startF3Preload(tileData, cachedResults) {
-        // バックグラウンドで「必須シート」のロードを開始する (キャッシュ目的)
-        
         // 1. 必須シートリストを作成
         const requiredTileIds = new Set(cachedResults.map(result => result.tileId));
         const requiredSheetIndices = new Set();
@@ -400,38 +410,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log(`[F3 Preload] F1完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
         // 3. プリロード (fetch) を実行
-        // ★ 修正: Promise.allをrunBatchedLoadsに置き換え、並列数を10に制限
         const MAX_PRELOAD_CONCURRENCY = 10;
-        
-        // runBatchedLoadsが実行する「関数の配列」を作成
         const preloadTasks = urlsToPreload.map(url => {
-            return () => fetch(url, { mode: 'cors' }) // キャッシュを確実にする
+            return () => fetch(url, { mode: 'cors' })
                          .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err));
         });
         
         preloadPromise = runBatchedLoads(preloadTasks, MAX_PRELOAD_CONCURRENCY);
         
-        // ログ出力
         if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のプリロードを開始... (並列数: ${MAX_PRELOAD_CONCURRENCY})`;
     }
-    // ★★★ 修正点ここまで ★★★
 
 
-    // --- 3. モザイク生成開始 (キャッシュ機能 + タイマー) ---
-    generateButton.addEventListener('click', () => {
+    // --- 3. モザイク生成開始 (F1計算 + F2 Worker呼び出し) ---
+    generateButton.addEventListener('click', async () => {
         if (!mainImage || !edgeCanvas || !thumbSheetImage.complete) {
             statusText.textContent = 'エラー: メイン画像またはスプライトシートが準備できていません。';
             return; 
         }
-        if (isGeneratingFullRes) { /* ... */ return; }
+        // ★ 修正: F1実行中 / F2実行中 / F3実行中 はいずれもブロック
+        if (workers.length > 0 || isGeneratingPreview || isGeneratingFullRes) {
+            console.warn("[Button Click] 既に別の処理が実行中です。");
+            return;
+        }
 
-        terminateWorkers(); 
+        terminateWorkers(); // F1 Workerを念のためクリア
         generateButton.disabled = true;
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
         
         // ★ 修正: 環境ログを保持しつつ、以降のログをリセット
-        timingLog.innerHTML = `[環境] CPUコア: ${navigator.hardwareConcurrency || 'N/A'}, RAM: ${navigator.deviceMemory || 'N/A'} GB`; 
+        const envLog = timingLog.innerHTML.split('\n')[0]; // 1行目 (環境ログ) を保持
+        timingLog.innerHTML = envLog; 
 
         const currentHeavyParams = {
             src: mainImage.src,
@@ -444,56 +454,36 @@ document.addEventListener('DOMContentLoaded', async () => {
             brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
         };
         
-        // ★ 修正: isPreviewはF2描画時にのみ使用
-        // const isPreview = previewModeCheckbox.checked; 
-
-        // ★ 修正点: 問題③対策 - タイルサイズが変更されたかを明示的にチェック
         const isTileSizeChanged = lastHeavyParams.tileSize !== currentHeavyParams.tileSize;
         
         // 3. キャッシュのチェック
         // タイルサイズが変わっておらず、かつ、キャッシュが存在し、その他HeavyParamsが変わっていない場合のみ高速再描画
         if (!isTileSizeChanged && cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
             
-            // --- Case 1: 高速再描画 (Worker処理をスキップ) ---
+            // --- Case 1: 高速再描画 (Worker処理(F1)をスキップ) ---
             statusText.textContent = 'ステータス: 描画パラメータのみ変更... 高速に再描画します。';
             
-            const t_render_start = performance.now(); // ★ タイマー開始
-            
-            // ★ 修正: スプライトシート描画ロジックに変更
-            renderMosaic(
-                mainCanvas, 
-                cachedResults, 
-                mainImage.width, 
-                mainImage.height, 
-                currentLightParams.blendOpacity, 
-                currentLightParams.edgeOpacity, 
-                currentLightParams.brightnessCompensation,
-                1.0 // scale = 1.0
+            // ★ 修正: F2 Workerを呼び出す
+            await renderMosaicWithWorker(
+                mainCanvas,
+                cachedResults,
+                currentLightParams
             );
             
-            // ★ 修正: F2描画は非同期ではなくなったため、.then() を削除
-            const t_render_end = performance.now();
-            const renderTime = (t_render_end - t_render_start) / 1000.0;
-            if(timingLog) timingLog.textContent += `\n[キャッシュ使用] 再描画 (F2): ${renderTime.toFixed(3)} 秒`;
-            
-            generateButton.disabled = false;
             return; 
         }
         
-        // --- Case 2: 通常処理 (Worker処理を実行) ---
-        // タイルサイズが変わった場合、またはその他のHeavyParamsが変わった場合は、再計算
+        // --- Case 2: 通常処理 (F1 Worker処理を実行) ---
         cachedResults = null; 
         lastHeavyParams = currentHeavyParams; 
         statusText.textContent = 'ステータス: タイル配置を計算中...';
         
         t_worker_start = performance.now(); 
         
-        // ★★★ 最終修正点: Workerに渡すImageData取得前にCanvasを元画像で上書きし、ピクセルデータの汚染を防ぐ ★★★
         ctx.clearRect(0, 0, mainImage.width, mainImage.height);
         ctx.drawImage(mainImage, 0, 0); 
-        // ★★★ 最終修正点ここまで ★★★
         
-        const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); // ★ ここでクリーンな元画像データを取得
+        const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); // ★ クリーンな元画像データを取得
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
 
@@ -514,54 +504,48 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (startY >= endY) continue; 
             activeWorkers++; 
             const worker = new Worker('mosaic_worker.js');
-            workers.push(worker);
-            worker.onmessage = (e) => {
+            workers.push(worker); // F1 Workerをリストに追加
+            worker.onmessage = async (e) => { // ★ 修正: F1完了後にF2を呼ぶため async
                 if (e.data.type === 'status') {
                     statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
                 } else if (e.data.type === 'progress') {
-                    if (progressBar) { /* ... */ }
+                    // ( ... プログレスバー ... )
                 } else if (e.data.type === 'complete') {
-                    // ★ 修正: F1 Workerは { tileId, patternType, x, y, ... } の配列を返す
                     allResults = allResults.concat(e.data.results);
                     finishedWorkers++;
+                    
                     if (finishedWorkers === activeWorkers) {
-                        // ★ 変更点: フェーズ1（Worker）の時間計測
+                        // --- F1 (計算) 完了 ---
                         const t_worker_end = performance.now();
                         const workerTime = (t_worker_end - t_worker_start) / 1000.0;
                         
-                        // ★★★ 修正点: F1 処理量メトリクスをログに追加 ★★★
                         if(timingLog) timingLog.textContent += `\n[F1] Worker 配置計算 (F1): ${workerTime.toFixed(3)} 秒 (タイル総数: ${tileData.tiles.length})`;
 
-                        statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
+                        statusText.textContent = 'ステータス: 全ワーカー処理完了。F2プレビュー描画中...';
                         if (progressBar) progressBar.style.width = '100%';
                         
                         cachedResults = allResults; 
                         
-                        // F1完了後、F2描画を実行
-                        renderMosaic(
+                        // ★ 修正: F1完了後、F2 Workerを呼び出す
+                        await renderMosaicWithWorker(
                             mainCanvas,
                             cachedResults, 
-                            mainImage.width, 
-                            mainImage.height, 
-                            currentLightParams.blendOpacity, 
-                            currentLightParams.edgeOpacity, 
-                            currentLightParams.brightnessCompensation,
-                            1.0 // scale = 1.0
+                            currentLightParams
                         );
                         
-                        // ★★★ 修正点: F2描画と並行してF3プリロードを開始 ★★★
+                        // F2描画と並行してF3プリロードを開始
                         startF3Preload(tileData, cachedResults);
                         
-                        terminateWorkers();
+                        terminateWorkers(); // F1 Workerを解放
                     }
                 }
             };
             worker.onerror = (error) => { /* ... */ };
             
-            // ★ 修正: mosaic_worker.js に新しい tileData 構造を渡す
+            // F1 Workerに処理を依頼
             worker.postMessage({ 
                 imageData: imageData, 
-                tileData: tileData, // 新しい {tileSets, tiles} 構造
+                tileData: tileData, 
                 tileSize: currentHeavyParams.tileSize,
                 width: mainImage.width,
                 height: mainImage.height,
@@ -576,151 +560,97 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // (F2/F3-A共通の並列ロード制御キュー - 削除)
     
-    async function renderMosaic(
+    // ★★★ 修正点: F2 (プレビュー) 描画を Worker に移譲 ★★★
+    
+    /**
+     * preview_worker.js を起動し、F2描画を実行する
+     */
+    async function renderMosaicWithWorker(
         targetCanvas, 
-        results, // F1 (Worker) からの { tileId, patternType, x, y, ... } 配列
-        width, height,
-        blendOpacity, edgeOpacity, brightnessCompensation, 
-        scale = 1.0 
+        results, // F1 (Worker) からの { tileId, ... } 配列
+        lightParams
     ) {
+        if (isGeneratingPreview) return; // F2実行中は何もしない
+        isGeneratingPreview = true;
+        generateButton.disabled = true; // F2実行中はボタンを無効化
         
-        isPreviewRender = true; // この関数はF2プレビュー専用
+        const t_f2_start = performance.now(); // F2準備開始
 
-        const t_render_start = performance.now(); // ★ タイマー開始 (F2)
+        try {
+            statusText.textContent = `ステータス: F2プレビューWorkerを起動中...`;
+            
+            // 1. Workerに転送するImageBitmapを都度作成
+            const mainImageBitmap = await createImageBitmap(mainImage);
+            const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
+            const thumbSheetBitmap = await createImageBitmap(thumbSheetImage);
+            
+            const t_f2_bitmap_end = performance.now();
+            
+            statusText.textContent = `ステータス: F2プレビュー描画中... (Worker実行中)`;
+            
+            const previewWorker = new Worker('./preview_worker.js');
+            
+            const workerPromise = new Promise((resolve, reject) => {
+                previewWorker.onmessage = (e) => {
+                    if (e.data.type === 'complete') {
+                        // F2 Worker 完了
+                        const finalBitmap = e.data.bitmap;
+                        const ctx = targetCanvas.getContext('2d');
+                        
+                        // メインスレッドの仕事は、完成品を1回描画するだけ
+                        ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+                        ctx.drawImage(finalBitmap, 0, 0);
+                        finalBitmap.close(); // Bitmapを解放
+                        
+                        // F2メトリクスをログに追加
+                        if(timingLog) {
+                            timingLog.textContent += `\n[F2] Worker 描画 (F2) 合計: ${e.data.totalTime.toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2-A: タイル描画 (Worker): ${e.data.tileTime.toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2-B: ブレンド (Worker): ${e.data.blendTime.toFixed(3)} 秒`;
+                        }
+                        
+                        resolve();
+                    } else if (e.data.type === 'error') {
+                        reject(new Error(e.data.message));
+                    }
+                    previewWorker.terminate();
+                };
+                previewWorker.onerror = (error) => {
+                    reject(new Error(`F2 Worker error: ${error.message}`));
+                    previewWorker.terminate();
+                };
+                
+                // 2. F2 Workerに処理を依頼 (Bitmapを転送)
+                previewWorker.postMessage({
+                    tileData: tileData,
+                    cachedResults: results,
+                    mainImageBitmap: mainImageBitmap,
+                    edgeImageBitmap: edgeImageBitmap,
+                    thumbSheetBitmap: thumbSheetBitmap,
+                    width: mainImage.width,
+                    height: mainImage.height,
+                    lightParams: lightParams
+                }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), thumbSheetBitmap]); // 転送リスト
+            });
+            
+            await workerPromise; // F2 Workerの完了を待つ
 
-        const canvasWidth = width * scale;
-        const canvasHeight = height * scale;
-        
-        targetCanvas.width = canvasWidth;
-        targetCanvas.height = canvasHeight;
-        const ctx = targetCanvas.getContext('2d');
-        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-        
-        statusText.textContent = `ステータス: スプライトシートからプレビューを描画中...`;
+            const t_f2_end = performance.now();
+            const bitmapTime = (t_f2_bitmap_end - t_f2_start) / 1000.0;
+            const totalF2Time = (t_f2_end - t_f2_start) / 1000.0;
 
-        ctx.save(); 
-        ctx.beginPath();
-        ctx.rect(0, 0, canvasWidth, canvasHeight); 
-        ctx.clip(); 
-
-        const MIN_TILE_L = 5.0; 
-        const MAX_BRIGHTNESS_RATIO = 5.0; 
-        const brightnessFactor = brightnessCompensation / 100; 
-        
-        // F2（プレビュー）用のスプライトシート情報を取得
-        const thumbSet = tileData.tileSets.thumb;
-        const thumbTileW = thumbSet.tileWidth;
-        const thumbTileH = thumbSet.tileHeight;
-
-        // ★★★ 修正点: F2描画は非同期チャンク化せず、同期的に行う ★★★
-        // (I/Oが1回（thumbSheetImage）しか発生しないため、描画自体は非常に高速なはず)
-        
-        for (const tileResult of results) {
-            
-            const tileInfo = tileData.tiles[tileResult.tileId];
-            if (!tileInfo) {
-                console.warn(`Tile data not found for id: ${tileResult.tileId}`);
-                continue;
-            }
-            
-            // 選択されたパターン（L/C/R, flip0/1）の情報を取得
-            const pattern = tileInfo.patterns.find(p => p.type === tileResult.patternType);
-            if (!pattern) {
-                console.warn(`Pattern ${tileResult.patternType} not found for tile id: ${tileResult.tileId}`);
-                continue;
-            }
-
-            // 1. 明度補正
-            let targetL = tileResult.targetL; 
-            let tileL = pattern.l; 
-            if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
-            let brightnessRatio = targetL / tileL; 
-            if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
-                brightnessRatio = MAX_BRIGHTNESS_RATIO;
-            }
-            const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
-            ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-            
-            // 2. 描画座標 (Canvas上の位置)
-            const dx = tileResult.x * scale;
-            const dy = tileResult.y * scale;
-            const dWidth = tileResult.width * scale;
-            const dHeight = tileResult.height * scale; 
-            
-            // 3. ソース座標 (スプライトシート上の位置)
-            const coords = tileInfo.thumbCoords;
-            
-            // 4. クロップ計算 (F1の解析ロジックと一致させる)
-            const sSize = Math.min(thumbTileW, thumbTileH);
-            const isHorizontal = thumbTileW > thumbTileH;
-            
-            let sx = coords.x; // スプライトシート上のタイル左上X
-            let sy = coords.y; // スプライトシート上のタイル左上Y
-            
-            const typeParts = tileResult.patternType.split('_'); 
-            const cropType = typeParts[0]; 
-            const flipType = typeParts[1]; 
-            
-            if (isHorizontal) {
-                if (cropType === "cropC") sx += Math.floor((thumbTileW - sSize) / 2);
-                else if (cropType === "cropR") sx += (thumbTileW - sSize);
-            } else {
-                if (cropType === "cropM") sy += Math.floor((thumbTileH - sSize) / 2);
-                else if (cropType === "cropB") sy += (thumbTileH - sSize);
+            if(timingLog) {
+                 timingLog.textContent += `\n[F2] メインスレッド待機 (F2総時間): ${totalF2Time.toFixed(3)} 秒 (Bitmap準備: ${bitmapTime.toFixed(3)}秒)`;
             }
 
-            // 5. 描画実行
-            ctx.save();
-            if (flipType === "flip1") {
-                ctx.scale(-1, 1);
-                ctx.drawImage(thumbSheetImage, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
-            } else {
-                ctx.drawImage(thumbSheetImage, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
-            }
-            ctx.restore();
-            ctx.filter = 'none';
-        }
-        
-        const t_render_load_end = performance.now(); // ★ タイマー (F2 ロード完了)
-        
-        ctx.restore(); // クリッピングを解除
-
-        if (progressBar) progressBar.style.width = '100%';
-        statusText.textContent = 'ステータス: タイル描画完了。ブレンド処理中...';
-
-        // 2段階ブレンド処理
-        if (blendOpacity > 0 && mainImage) {
-            ctx.globalCompositeOperation = 'soft-light'; 
-            ctx.globalAlpha = blendOpacity / 100;
-            ctx.drawImage(mainImage, 0, 0, canvasWidth, canvasHeight);
-        }
-        if (edgeOpacity > 0 && edgeCanvas) {
-            ctx.globalCompositeOperation = 'multiply'; 
-            ctx.globalAlpha = edgeOpacity / 100;
-            ctx.drawImage(edgeCanvas, 0, 0, canvasWidth, canvasHeight);
-        }
-        ctx.globalCompositeOperation = 'source-over'; 
-        ctx.globalAlpha = 1.0; 
-
-        statusText.textContent = 'ステータス: モザイクアートが完成しました！';
-        
-        const t_render_blend_end = performance.now(); // ★ タイマー (F2 完了)
-        
-        // ★ 変更点: フェーズ2（描画）の時間計測
-        const loadTime = (t_render_load_end - t_render_start) / 1000.0;
-        const blendTime = (t_render_blend_end - t_render_load_end) / 1000.0;
-        const totalRenderTime = (t_render_blend_end - t_render_start) / 1000.0;
-        if(timingLog) {
-            // isPreviewに応じてログを変更
-            timingLog.textContent += `\n[F2] 描画 (F2) (Thumb) 合計: ${totalRenderTime.toFixed(3)} 秒`;
-            timingLog.textContent += `\n  - タイルロード/描画: ${loadTime.toFixed(3)} 秒`;
-            timingLog.textContent += `\n  - ブレンド/線画合成: ${blendTime.toFixed(3)} 秒`;
-        }
-
-        // プレビュー描画時のみ、ボタンを有効化
-        if (isPreviewRender) { // F2描画時のみ
+            statusText.textContent = 'ステータス: モザイクアートが完成しました！';
+            
+        } catch (err) {
+            statusText.textContent = `エラー: F2プレビュー描画に失敗しました。 ${err.message}`;
+            console.error("F2 Preview Worker failed:", err);
+        } finally {
+            isGeneratingPreview = false;
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
         }
@@ -729,14 +659,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 5. ダウンロード機能 (F3) ---
     if (downloadButton) {
-        // ダウンロードパラメータを配列にまとめる (アドバイス機能用)
+        // ( ... F3 ダウンロード機能 (変更なし) ... )
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
 
         downloadButton.addEventListener('click', async () => {
-            // ダウンロード開始時にパラメータ強調をリセット
             resetParameterStyles(allDownloadParams);
             
-            if (isGeneratingFullRes) return; 
+            // ★ 修正: F1/F2/F3が実行中ならブロック
+            if (workers.length > 0 || isGeneratingPreview || isGeneratingFullRes) {
+                console.warn("[Button Click] 既に別の処理が実行中です。");
+                return;
+            } 
             if (!cachedResults || !mainImage) { /* ... */ return; }
 
             if (downloadWarningArea) downloadWarningArea.style.display = 'none';
@@ -751,7 +684,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 const t_download_start = performance.now(); // ★ タイマー開始 (F3)
 
-                // ( ... lightParams, scale, quality の取得 ... )
                 const lightParams = {
                     blendOpacity: parseInt(blendRangeInput ? blendRangeInput.value : 30),
                     edgeOpacity: parseInt(edgeOpacityInput ? edgeOpacityInput.value : 30),
@@ -760,13 +692,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const scale = parseFloat(resolutionScaleInput ? resolutionScaleInput.value : 1.0);
                 const quality = parseInt(jpegQualityInput ? jpegQualityInput.value : 90) / 100.0; 
 
-                // ★★★ 修正点: F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
+                // ★ F3 Worker化のためにメイン画像をImageBitmapに変換 (F2と同様)
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
                 statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
 
-                // ★★★ 修正点: F3 オンデマンド・ロードのため、必須シートリストを作成 ★★★
+                // F3 オンデマンド・ロードのため、必須シートリストを作成
                 const requiredTileIds = new Set(cachedResults.map(result => result.tileId));
                 const requiredSheetIndices = new Set();
                 requiredTileIds.forEach(id => {
@@ -776,16 +708,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 });
                 const requiredSheetIndicesArray = [...requiredSheetIndices];
-                // ★★★ 修正点ここまで ★★★
                 
-                // Workerのパスが正しいことを前提に、F3 Workerを起動
                 const downloadWorker = new Worker('./download_worker.js'); 
                 
                 const workerPromise = new Promise((resolve, reject) => {
                     downloadWorker.onmessage = (e) => {
                         if (e.data.type === 'complete') {
                             
-                            // ★★★ 修正点: F3 詳細メトリクスをログに追加 ★★★
+                            // F3 詳細メトリクスをログに追加
                             if (timingLog) {
                                 timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\n  - F3-A1: スプライトシートロード: ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
@@ -793,9 +723,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 timingLog.textContent += `\n  - F3-A2: Worker 描画: ${e.data.renderTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\n  - F3-B: Worker エンコード: ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                             }
-                            // ★★★ 修正点ここまで ★★★
                             
-                            // ★ 修正点: ArrayBufferを受信し、Blobに再構築
                             const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
                             resolve(blob);
                         } else if (e.data.type === 'error') {
@@ -814,10 +742,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     // Workerに全データとWorker内で実行する描画関数を渡す
                     downloadWorker.postMessage({
-                        tileData: tileData, // ★ 修正: JSON全体を渡す
+                        tileData: tileData, 
                         cachedResults: cachedResults,
-                        requiredSheetIndices: requiredSheetIndicesArray, // ★ 修正: 必須リストを渡す
-                        mainImageBitmap: mainImageBitmap, // ImageBitmapを転送
+                        requiredSheetIndices: requiredSheetIndicesArray, 
+                        mainImageBitmap: mainImageBitmap, 
                         edgeImageBitmap: edgeImageBitmap,
                         width: mainImage.width,
                         height: mainImage.height,
@@ -828,25 +756,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
                 
                 const blob = await workerPromise;
-                // ★★★ 修正点ここまで ★★★
                 
                 const t_download_blob_end = performance.now(); // ★ Worker完了時間
 
-                // ★ 変更点: フェーズ3（ダウンロード）の時間計測
                 const downloadRenderTime = (t_download_blob_end - t_download_start) / 1000.0;
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
                     timingLog.textContent += `\n[F3] メインスレッド待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
                 }
 
-                // ( ... ファイルサイズチェックと警告 ... )
+                // ( ... ファイルサイズチェックと警告 (変更なし) ... )
                 const fileSizeMB = blob.size / 1024 / 1024;
                 const limitMB = 15;
                 if (fileSizeMB <= limitMB || !downloadWarningArea) {
                     statusText.textContent = `ステータス: 高画質版 ( ${fileSizeMB.toFixed(1)} MB) の準備完了。`;
                     downloadBlob(blob, `photomosaic-${Date.now()}.jpg`);
                 } else {
-                    // ★ 修正点: Blobを保持し、警告を表示
                     lastGeneratedBlob = blob; 
                     downloadWarningMessage.textContent = `警告: ファイルサイズが ${fileSizeMB.toFixed(1)} MB となり、X/Twitterの上限(15MB)を超えています。このままダウンロードしますか？`;
                     downloadWarningArea.style.display = 'block';
@@ -857,10 +782,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = `エラー: 高画質版の生成またはダウンロードに失敗しました。 ${err.message}`;
                 console.error("Download failed:", err);
             } finally {
-                // ( ... 完了処理 ... )
                 isGeneratingFullRes = false;
                 generateButton.disabled = false;
-                // ダウンロード警告が表示されている場合、ボタンは有効にしない
                 if (downloadWarningArea.style.display !== 'block') {
                      downloadButton.disabled = false;
                 }
@@ -868,49 +791,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // --- 6. 警告ボタンのリスナー ---
+    // --- 6. 警告ボタンのリスナー (変更なし) ---
     if (warningYesButton && warningNoButton) {
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
         
-        // Yesボタン: ダウンロード続行
         warningYesButton.addEventListener('click', () => {
             if (!lastGeneratedBlob) return;
             downloadWarningArea.style.display = 'none';
             resetParameterStyles(allDownloadParams);
-
-            // ダウンロードを再開（Blobは lastGeneratedBlob に格納済み）
             downloadBlob(lastGeneratedBlob, `photomosaic-${Date.now()}.jpg`);
-            
             statusText.textContent = 'ステータス: 警告を無視してダウンロードを実行しました。';
-            
-            // UIを元に戻す
             generateButton.disabled = false;
             downloadButton.disabled = false;
         });
 
-        // Noボタン: キャンセルとアドバイス
         warningNoButton.addEventListener('click', () => {
             downloadWarningArea.style.display = 'none';
-            resetParameterStyles(allDownloadParams); // 念のためスタイルリセット
-
+            resetParameterStyles(allDownloadParams); 
             const currentScale = parseFloat(resolutionScaleInput.value);
             const currentQuality = parseInt(jpegQualityInput.value);
-
-            // 1. アドバイスロジック
             const newScale = Math.max(1.0, currentScale - 0.5); 
             const newQuality = Math.max(70, currentQuality - 10); 
-
             let advice = 'ダウンロードをキャンセルしました。15MBの制限を超えるため、以下のパラメータを変更し、再生成してください:\n';
             advice += ` - 💡 **解像度スケール**を現在の ${currentScale.toFixed(1)}x から **${newScale.toFixed(1)}x** に下げてみてください。（ファイルサイズへの影響が最大です）\n`;
             advice += ` - 📷 または **JPEG 品質**を現在の ${currentQuality}% から **${newQuality}%** に下げてみてください。\n`;
-
             statusText.textContent = advice;
-            
-            // 2. UIの強調 (アドバイス対象のスライダーを強調)
             highlightParameter(resolutionScaleInput);
             highlightParameter(jpegQualityInput);
-
-            // 3. 完了処理 (ダウンロードボタンを再有効化)
             generateButton.disabled = false;
             downloadButton.disabled = false;
         });
@@ -918,21 +825,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 });
 
-// ★★★ 修正点: downloadBlob関数のロジックを修正し、ダウンロードブロックを回避する ★★★
+// ( ... downloadBlobヘルパー関数 (変更なし) ... )
 function downloadBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    
-    // a.click()がブロックされる問題を回避するため、setTimeoutでクリックを遅延させる
     a.href = url;
     a.download = fileName;
-    
     document.body.appendChild(a);
     a.click();
-    
-    // ダウンロード処理を完了させるための十分な遅延を確保
     setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }, 100); 
+}
 }
