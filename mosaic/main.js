@@ -347,6 +347,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         workers.forEach(worker => worker.terminate());
         workers = [];
     }
+    
+    // ★★★ 修正点: F3 プリロード (バックグラウンド・ロード) 戦略 ★★★
+    let preloadPromise = null;
+    
+    function startF3Preload(tileData, cachedResults) {
+        // バックグラウンドで「必須シート」のロードを開始する (キャッシュ目的)
+        
+        // 1. 必須シートリストを作成
+        const requiredTileIds = new Set(cachedResults.map(result => result.tileId));
+        const requiredSheetIndices = new Set();
+        requiredTileIds.forEach(id => {
+            const tileInfo = tileData.tiles[id];
+            if (tileInfo) {
+                requiredSheetIndices.add(tileInfo.fullCoords.sheetIndex);
+            }
+        });
+        const requiredSheetIndicesArray = [...requiredSheetIndices];
+        
+        // 2. 必須シートのURLリストを作成
+        const fullSet = tileData.tileSets.full;
+        const urlsToPreload = requiredSheetIndicesArray.map(index => fullSet.sheetUrls[index]);
+
+        console.log(`[F3 Preload] F1完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
+        
+        // 3. プリロード (fetch) を実行
+        // (Promise.allは使わず、個々のfetchを並列で実行し、完了は待たない)
+        preloadPromise = Promise.all(
+            urlsToPreload.map(url => 
+                fetch(url).catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err))
+            )
+        );
+        
+        // ログ出力
+        if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のプリロードを開始...`;
+    }
+    // ★★★ 修正点ここまで ★★★
 
 
     // --- 3. モザイク生成開始 (キャッシュ機能 + タイマー) ---
@@ -480,6 +516,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                             currentLightParams.brightnessCompensation,
                             1.0 // scale = 1.0
                         );
+                        
+                        // ★★★ 修正点: F2描画と並行してF3プリロードを開始 ★★★
+                        startF3Preload(tileData, cachedResults);
+                        
                         terminateWorkers();
                     }
                 }
@@ -504,8 +544,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、非同期チャンク描画ロジックに置き換え ★★★
-    
     // (F2/F3-A共通の並列ロード制御キュー - 削除)
     // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
     
