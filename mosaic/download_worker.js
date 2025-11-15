@@ -1,6 +1,30 @@
 // download_worker.js
 // F3処理（高解像度描画 + JPEGエンコード）を完全に実行するWorker
 
+// F2/F3-A共通の並列ロード制御キュー
+async function runBatchedLoads(tilePromises, maxConcurrency) {
+    const running = [];
+
+    for (const promise of tilePromises) {
+        // 実行中の配列に新しいPromiseを追加
+        const p = promise.then(result => {
+            // Promiseが解決したら、実行中の配列から自身を削除
+            running.splice(running.indexOf(p), 1);
+            return result;
+        });
+
+        running.push(p);
+
+        // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
+        if (running.length >= maxConcurrency) {
+            await Promise.race(running);
+        }
+    }
+    // 残りのすべてのPromiseが完了するのを待つ
+    return Promise.all(running);
+}
+
+
 /**
  * Worker内で実行されるrenderMosaicのコピー (タイル画像ロードのロジックを含む)
  */
@@ -14,7 +38,6 @@ async function renderMosaicWorker(
     const canvasWidth = width * scale;
     const canvasHeight = height * scale;
     
-    // Canvasをリセット (OffscreenCanvasはWorker内で作成されるため、ここではgetContextで準備のみ)
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
@@ -28,28 +51,30 @@ async function renderMosaicWorker(
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
     ctx.clip(); 
 
-    const promises = [];
+    // ★ 修正点1: 同時実行数の上限を定義
+    const MAX_CONCURRENT_REQUESTS = 50; 
+    const tilePromises = [];
     
     const MIN_TILE_L = 5.0; 
     const MAX_BRIGHTNESS_RATIO = 5.0; 
     const brightnessFactor = lightParams.brightnessCompensation / 100; 
 
-    // ★ 修正点: new Image() を使用せず、Worker内でfetchとcreateImageBitmapを使用する
+    // ★ 修正点2: Promiseを配列に追加するだけに変更
     for (const tile of results) {
         // 各タイルのロードと描画をPromiseでラップ
         const p = (async () => {
             let tileBitmap = null;
-            let finalUrl = tile.url; // F3モードでは常にフル解像度
+            let finalUrl = tile.url; 
 
             try {
                 // 1. 画像ファイルを非同期でフェッチし、Blobとして取得
                 const response = await fetch(finalUrl);
                 if (!response.ok) {
-                    throw new Error(`HTTP Error: ${response.status}`);
+                    throw new new Error(`HTTP Error: ${response.status}`);
                 }
                 const blob = await response.blob();
                 
-                // 2. BlobからImageBitmapを生成 (Worker内で描画可能な形式)
+                // 2. BlobからImageBitmapを生成
                 tileBitmap = await createImageBitmap(blob);
 
                 // 3. 描画ロジックの実行
@@ -104,17 +129,18 @@ async function renderMosaicWorker(
                 // ImageBitmapの解放 (メモリ管理のため)
                 if (tileBitmap) tileBitmap.close();
             }
-        })(); // 即時実行される非同期関数
-        promises.push(p);
+        })(); 
+        tilePromises.push(p); // Promiseをキューに追加
     }
 
-    await Promise.all(promises);
+    // ★ 修正点3: 全てのPromiseを並列制御キューで実行
+    await runBatchedLoads(tilePromises, MAX_CONCURRENT_REQUESTS); 
     
     const t_render_end = performance.now();
 
     ctx.restore(); // クリッピングを解除
-
-    // 2段階ブレンド処理
+    
+    // 2段階ブレンド処理 (WorkerではImageBitmapに対して実行)
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -167,10 +193,8 @@ self.onmessage = async (e) => {
         const encodeTime = t_encode_end - t_encode_start;
 
         // 4. メインスレッドに結果を返送
-        // ArrayBufferは転送可能 (Transferable) な型です。
         self.postMessage({ 
             type: 'complete', 
-            // ArrayBufferとBlobのタイプを送信
             buffer: buffer, 
             mimeType: mimeType,
             totalTime: totalTime / 1000.0,
