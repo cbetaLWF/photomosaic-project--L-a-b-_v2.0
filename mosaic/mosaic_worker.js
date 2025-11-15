@@ -88,9 +88,10 @@ self.onmessage = async (e) => {
                 return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
             });
             
-            // ( ... 最適なタイルを検索するループ (変更なし) ... )
+            // ( ... 最適なタイルを検索するループ ... )
             let bestMatch = null;
             let bestMatchUrl = null;
+            let bestMatchThumbUrl = null; // ★ 修正点1: thumb_urlを保持する変数を追加
             let minDistance = Infinity;
             
             const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
@@ -153,14 +154,16 @@ self.onmessage = async (e) => {
                         minDistance = totalDistance;
                         bestMatch = pattern; 
                         bestMatchUrl = tile.url; 
+                        bestMatchThumbUrl = tile.thumb_url; // ★ 修正点2: thumb_urlも保持
                     }
                 } // 拡張パターン (6種) のループ終わり
             } // タイル (tileData) のループ終わり
 
-            // ( ... 結果を格納するロジック (変更なし) ... )
+            // ( ... 結果を格納するロジック ... )
             if (bestMatch) {
                 results.push({
                     url: bestMatchUrl, 
+                    thumb_url: bestMatchThumbUrl, // ★ 修正点3: 結果オブジェクトにthumb_urlを追加
                     patternType: bestMatch.type, 
                     x: x, y: y,
                     width: tileWidth, 
