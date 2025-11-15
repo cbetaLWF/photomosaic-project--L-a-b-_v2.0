@@ -171,7 +171,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const resolutionScaleInput = document.getElementById('resolution-scale');
     const jpegQualityInput = document.getElementById('jpeg-quality');
     
-    const timingLog = document.getElementById('timing-log');
+    const timingLog = document.getElementById('timing-log'); // ★ null の可能性がある
 
     
     // ( ... 必須要素チェック (null許容) ... )
@@ -181,11 +181,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     
-    // ★★★ 修正点: 環境メトリクスをログの先頭に追加 ★★★
-    timingLog.textContent = ''; // ログをクリア
-    const cpuCores = navigator.hardwareConcurrency || 'N/A';
-    const deviceRam = navigator.deviceMemory || 'N/A';
-    timingLog.innerHTML = `[環境] CPUコア: ${cpuCores}, RAM: ${deviceRam} GB`;
+    // ★★★ 修正点: timingLog が null でもクラッシュしないよう保護 ★★★
+    if (timingLog) {
+        timingLog.textContent = ''; // ログをクリア
+        const cpuCores = navigator.hardwareConcurrency || 'N/A';
+        const deviceRam = navigator.deviceMemory || 'N/A';
+        timingLog.innerHTML = `[環境] CPUコア: ${cpuCores}, RAM: ${deviceRam} GB`;
+    }
     // ★★★ 修正点ここまで ★★★
     
     const ctx = mainCanvas.getContext('2d');
@@ -201,7 +203,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // ★ 修正: F2プレビュー用のスプライトシート (Image)
     let thumbSheetImage = null; 
-    // let fullSheetBitmaps = []; // F3はWorkerに移行したため、メインスレッドでの保持は不要
 
     // ★ 修正: F2実行中フラグ
     let isGeneratingPreview = false;
@@ -236,19 +237,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         thumbSheetImage.onload = () => {
             statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
             if (mainImageInput) mainImageInput.disabled = false;
-            
-            // ★ 修正: この時点でImageBitmapに変換しておく (F2 Workerへの転送準備)
-            // createImageBitmap(thumbSheetImage)
-            //     .then(bitmap => {
-            //         thumbSheetBitmap = bitmap;
-            //         statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
-            //         if (mainImageInput) mainImageInput.disabled = false;
-            //     })
-            //     .catch(err => {
-            //         statusText.textContent = `エラー: プレビューBitmapの作成に失敗: ${err.message}`;
-            //     });
-            // → やはりF2 Worker起動のたびにBitmapを都度作成（転送）する方が、
-            //   メインスレッドのメモリ管理が単純になるため、グローバル保持はしない。
         };
         thumbSheetImage.onerror = () => {
             statusText.textContent = `エラー: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) のロードに失敗しました。`;
@@ -269,10 +257,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (event) => {
-                
-                // ★ 修正: 古いBitmapをクリーンアップ
-                // (mainImage は Imageオブジェクトなので .close() はない)
-                // (edgeCanvas は OffscreenCanvas なので .close() はない)
                 
                 mainImage = new Image();
                 mainImage.onload = () => {
@@ -440,8 +424,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (progressBar) progressBar.style.width = '0%';
         
         // ★ 修正: 環境ログを保持しつつ、以降のログをリセット
-        const envLog = timingLog.innerHTML.split('\n')[0]; // 1行目 (環境ログ) を保持
-        timingLog.innerHTML = envLog; 
+        if (timingLog) {
+            const envLog = timingLog.innerHTML.split('\n')[0]; // 1行目 (環境ログ) を保持
+            timingLog.innerHTML = envLog; 
+        }
 
         const currentHeavyParams = {
             src: mainImage.src,
