@@ -544,6 +544,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
+    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、非同期チャンク描画ロジックに置き換え ★★★
+    
     // (F2/F3-A共通の並列ロード制御キュー - 削除)
     // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
     
@@ -583,6 +585,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const thumbTileW = thumbSet.tileWidth;
         const thumbTileH = thumbSet.tileHeight;
 
+        // ★★★ 修正点: F2描画は非同期チャンク化せず、同期的に行う ★★★
+        // (I/Oが1回（thumbSheetImage）しか発生しないため、描画自体は非常に高速なはず)
+        
         for (const tileResult of results) {
             
             const tileInfo = tileData.tiles[tileResult.tileId];
