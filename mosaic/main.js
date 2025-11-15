@@ -504,6 +504,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
+    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、非同期チャンク描画ロジックに置き換え ★★★
+    
     // (F2/F3-A共通の並列ロード制御キュー - 削除)
     // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
     
@@ -692,14 +694,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
 
-                // ★★★ 修正点: F3スプライトシートのロード処理をメインスレッドから削除 ★★★
+                // ★★★ 修正点: F3 オンデマンド・ロードのため、必須シートリストを作成 ★★★
+                const requiredTileIds = new Set(cachedResults.map(result => result.tileId));
+                const requiredSheetIndices = new Set();
+                requiredTileIds.forEach(id => {
+                    const tileInfo = tileData.tiles[id];
+                    if (tileInfo) {
+                        requiredSheetIndices.add(tileInfo.fullCoords.sheetIndex);
+                    }
+                });
+                const requiredSheetIndicesArray = [...requiredSheetIndices];
+                // ★★★ 修正点ここまで ★★★
                 
                 // Workerのパスが正しいことを前提に、F3 Workerを起動
                 const downloadWorker = new Worker('./download_worker.js'); 
                 
-                // ★ 修正: F3ログに必要な情報をここで取得
-                const fullSet = tileData.tileSets.full;
-
                 const workerPromise = new Promise((resolve, reject) => {
                     downloadWorker.onmessage = (e) => {
                         if (e.data.type === 'complete') {
@@ -707,7 +716,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             // ★★★ 修正点: F3 詳細メトリクスをログに追加 ★★★
                             if (timingLog) {
                                 timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                timingLog.textContent += `\n  - F3-A1: スプライトシートロード: ${e.data.loadTime.toFixed(3)} 秒 (${fullSet.sheetUrls.length}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
+                                timingLog.textContent += `\n  - F3-A1: スプライトシートロード: ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
                                 timingLog.textContent += `\n  - F3-A1: Fetchリトライ/失敗回数: ${e.data.retryCount} 回 / ${e.data.failCount} 回`;
                                 timingLog.textContent += `\n  - F3-A2: Worker 描画: ${e.data.renderTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\n  - F3-B: Worker エンコード: ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
@@ -735,7 +744,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     downloadWorker.postMessage({
                         tileData: tileData, // ★ 修正: JSON全体を渡す
                         cachedResults: cachedResults,
-                        // fullSheetBitmaps: fullSheetBitmaps, // ★ 修正: ロード済みBitmapではなく、JSONを渡す
+                        requiredSheetIndices: requiredSheetIndicesArray, // ★ 修正: 必須リストを渡す
                         mainImageBitmap: mainImageBitmap, // ImageBitmapを転送
                         edgeImageBitmap: edgeImageBitmap,
                         width: mainImage.width,
