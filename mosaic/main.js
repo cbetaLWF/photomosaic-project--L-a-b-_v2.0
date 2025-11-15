@@ -679,10 +679,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = 'ステータス: JPEGエンコードをWorkerに委譲中...';
 
                 // ★★★ 修正点: F3-B (JPEGエンコード) をWorkerに委譲 ★★★
-                const downloadWorker = new Worker('download_worker.js');
+                // ImageBitmapではなくOffscreenCanvas自体を転送するように修正
+                const downloadWorker = new Worker('./download_worker.js'); 
                 
-                const offscreenCanvas = highResCanvas.transferToImageBitmap(); // ImageBitmapとして転送可能にする
-
                 const workerPromise = new Promise((resolve, reject) => {
                     downloadWorker.onmessage = (e) => {
                         if (e.data.type === 'complete') {
@@ -702,11 +701,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         downloadWorker.terminate();
                     };
                     
-                    // WorkerにImageBitmapと品質を転送
+                    // WorkerにOffscreenCanvasと品質を転送 (OffscreenCanvas自体はTransferable)
                     downloadWorker.postMessage({
-                        imageBitmap: offscreenCanvas,
+                        canvas: highResCanvas, // ★ 修正: OffscreenCanvas自体を渡す
                         quality: quality
-                    }, [offscreenCanvas]); // ImageBitmapを転送可能オブジェクトとして渡す
+                    }, [highResCanvas]); // ★ 修正: highResCanvas自体を転送リストに追加
                 });
                 
                 const blob = await workerPromise;
@@ -809,7 +808,6 @@ function downloadBlob(blob, fileName) {
     a.href = url;
     a.download = fileName;
     document.body.appendChild(a);
-    a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
