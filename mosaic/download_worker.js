@@ -45,7 +45,7 @@ async function renderMosaicWorker(
                 // 1. 画像ファイルを非同期でフェッチし、Blobとして取得
                 const response = await fetch(finalUrl);
                 if (!response.ok) {
-                    throw new new Error(`HTTP Error: ${response.status}`);
+                    throw new Error(`HTTP Error: ${response.status}`);
                 }
                 const blob = await response.blob();
                 
@@ -159,17 +159,24 @@ self.onmessage = async (e) => {
         });
         const t_encode_end = performance.now();
         
+        // ★ 修正点: BlobをArrayBufferに変換
+        const buffer = await blob.arrayBuffer();
+        const mimeType = blob.type; // BlobのMIME Typeを取得
+        
         const totalTime = t_encode_end - t_start;
         const encodeTime = t_encode_end - t_encode_start;
 
         // 4. メインスレッドに結果を返送
+        // ArrayBufferは転送可能 (Transferable) な型です。
         self.postMessage({ 
             type: 'complete', 
-            blob: blob,
+            // ArrayBufferとBlobのタイプを送信
+            buffer: buffer, 
+            mimeType: mimeType,
             totalTime: totalTime / 1000.0,
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0 
-        }, [blob]); 
+        }, [buffer]); // ArrayBufferを転送リストに追加
         
     } catch (error) {
         self.postMessage({ type: 'error', message: `Full F3 Worker failed: ${error.message}` });
