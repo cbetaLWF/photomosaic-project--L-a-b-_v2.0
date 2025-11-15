@@ -185,7 +185,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (blendRangeInput && blendValue) { /* ... */ }
     if (edgeOpacityInput && edgeOpacityValue) { /* ... */ }
 
-    // ★ 修正点: 問題③対策 - inputイベントでのキャッシュクリアは不要になり、ロジックを削除
 
     // --- 1. タイルデータの初期ロード ---
     try {
@@ -227,8 +226,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if(downloadButton) downloadButton.style.display = 'none';
                     mainCanvas.width = mainImage.width;
                     mainCanvas.height = mainImage.height;
-                    ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+                    
+                    // Canvasを元画像でリセット (Worker準備のため)
+                    ctx.clearRect(0, 0, mainImage.width, mainImage.height); 
                     ctx.drawImage(mainImage, 0, 0); 
+                    
                     statusText.textContent = `ステータス: 画像ロード完了。推奨値を計算中...`;
 
                     if (recommendationArea && applyRecommendationsButton) {
@@ -269,7 +271,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ★ 修正点: 問題②対応 - applyRecommendationsButton リスナーの実装
+    // ★ 修正点: 問題②対応 - applyRecommendationsButton リスナーの実装 (変更なし)
     if (applyRecommendationsButton) {
         applyRecommendationsButton.addEventListener('click', () => {
             if (!currentRecommendations) return;
@@ -302,7 +304,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             statusText.textContent = 'ステータス: 推奨パラメータを適用しました。';
-            // ヘビーパラメータが変更されたため、強制的にキャッシュをクリアする
+            // ヘビーパラメータ（タイルサイズ、テクスチャ）が変わった可能性があるのでキャッシュをクリア
             cachedResults = null;
             lastHeavyParams = {};
             generateButton.disabled = false;
@@ -377,9 +379,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         lastHeavyParams = currentHeavyParams; 
         statusText.textContent = 'ステータス: タイル配置を計算中...';
         
-        t_worker_start = performance.now(); // ★ タイマー開始 (F1)
+        t_worker_start = performance.now(); 
         
-        const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
+        // ★★★ 最終修正点: Workerに渡すImageData取得前にCanvasを元画像で上書きし、ピクセルデータの汚染を防ぐ ★★★
+        ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+        ctx.drawImage(mainImage, 0, 0); 
+        // ★★★ 最終修正点ここまで ★★★
+        
+        const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); // ★ ここでクリーンな元画像データを取得
         const numWorkers = navigator.hardwareConcurrency || 4;
         statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
 
@@ -629,6 +636,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 2. 高画質版は「オフスクリーンCanvas」で生成
                 const highResCanvas = new OffscreenCanvas(mainImage.width * scale, mainImage.height * scale);
+                
+                // ★★★ 最終修正点: Workerに渡すImageData取得前にCanvasを元画像で上書きし、ピクセルデータの汚染を防ぐ ★★★
+                highResCanvas.getContext('2d').clearRect(0, 0, mainImage.width, mainImage.height);
+                highResCanvas.getContext('2d').drawImage(mainImage, 0, 0, mainImage.width * scale, mainImage.height * scale); 
+                // (Workerに渡すImageDataはメインスレッドのCanvasから取得するが、ダウンロード用Canvasのベースも元画像である必要があるため、元画像を描画)
+                // ★★★ 最終修正点ここまで（mainCanvasのリセットは不要、WorkerへのImageDataは既に修正済みのため） ★★★
                 
                 await renderMosaic(
                     highResCanvas, // オフスクリーンCanvasに描画
