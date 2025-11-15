@@ -9,6 +9,8 @@ async function renderMosaicWorker(
     results, mainImageBitmap, edgeImageBitmap, width, height,
     lightParams, scale
 ) {
+    const t_render_start = performance.now(); // 描画時間計測開始
+
     const canvasWidth = width * scale;
     const canvasHeight = height * scale;
     
@@ -26,18 +28,31 @@ async function renderMosaicWorker(
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
     ctx.clip(); 
 
-    const totalTiles = results.length;
     const promises = [];
     
     const MIN_TILE_L = 5.0; 
     const MAX_BRIGHTNESS_RATIO = 5.0; 
     const brightnessFactor = lightParams.brightnessCompensation / 100; 
 
+    // ★ 修正点: new Image() を使用せず、Worker内でfetchとcreateImageBitmapを使用する
     for (const tile of results) {
-        const p = new Promise((resolve) => {
-            const img = new Image();
-            img.onload = () => {
-                // ( ... 明度補正、クロップ/反転ロジック ... )
+        // 各タイルのロードと描画をPromiseでラップ
+        const p = (async () => {
+            let tileBitmap = null;
+            let finalUrl = tile.url; // F3モードでは常にフル解像度
+
+            try {
+                // 1. 画像ファイルを非同期でフェッチし、Blobとして取得
+                const response = await fetch(finalUrl);
+                if (!response.ok) {
+                    throw new new Error(`HTTP Error: ${response.status}`);
+                }
+                const blob = await response.blob();
+                
+                // 2. BlobからImageBitmapを生成 (Worker内で描画可能な形式)
+                tileBitmap = await createImageBitmap(blob);
+
+                // 3. 描画ロジックの実行
                 let targetL = tile.targetL; 
                 let tileL = tile.tileL; 
                 if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -47,14 +62,16 @@ async function renderMosaicWorker(
                 }
                 const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
                 ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-                const sWidth = img.naturalWidth;
-                const sHeight = img.naturalHeight;
+
+                const sWidth = tileBitmap.width;
+                const sHeight = tileBitmap.height;
                 const sSize = Math.min(sWidth, sHeight);
                 const isHorizontal = sWidth > sHeight; 
                 const typeParts = tile.patternType.split('_'); 
                 const cropType = typeParts[0]; 
                 const flipType = typeParts[1]; 
                 let sx = 0, sy = 0;
+
                 if (isHorizontal) {
                     if (cropType === "cropC") sx = Math.floor((sWidth - sSize) / 2);
                     else if (cropType === "cropR") sx = sWidth - sSize;
@@ -66,29 +83,28 @@ async function renderMosaicWorker(
                 const dy = tile.y * scale;
                 const dWidth = tile.width * scale;
                 const dHeight = tile.height * scale; 
+                
                 ctx.save();
                 if (flipType === "flip1") {
                     ctx.scale(-1, 1);
-                    ctx.drawImage(img, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
+                    ctx.drawImage(tileBitmap, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
                 } else {
-                    ctx.drawImage(img, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
+                    ctx.drawImage(tileBitmap, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
                 }
                 ctx.restore();
                 ctx.filter = 'none';
-                resolve();
-            };
-            img.onerror = () => {
-                // ダウンロードモードでは高速プレビューのフォールバックは不要（常にフル解像度を試行）
-                console.error(`タイル画像のロードに失敗: ${tile.url}`);
+
+            } catch (error) {
+                // ロードまたは生成失敗時のフォールバック処理
+                console.error(`Worker failed to load/draw tile ${finalUrl}: ${error.message}`);
                 const grayValue = Math.round(tile.targetL * 2.55); 
                 ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
                 ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
-                resolve(); 
-            };
-            
-            // F3モードでは常にフル解像度を使用
-            img.src = tile.url; 
-        });
+            } finally {
+                // ImageBitmapの解放 (メモリ管理のため)
+                if (tileBitmap) tileBitmap.close();
+            }
+        })(); // 即時実行される非同期関数
         promises.push(p);
     }
 
@@ -147,7 +163,6 @@ self.onmessage = async (e) => {
         const encodeTime = t_encode_end - t_encode_start;
 
         // 4. メインスレッドに結果を返送
-        // Blobを転送可能オブジェクトとして渡す
         self.postMessage({ 
             type: 'complete', 
             blob: blob,
