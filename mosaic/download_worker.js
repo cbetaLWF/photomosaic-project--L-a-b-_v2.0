@@ -4,16 +4,41 @@
 // F2で成功したI/Oスロットリング回避ロジックをWorkerにも実装します。
 async function runBatchedLoads(tilePromises, maxConcurrency) {
     // F3 Worker内でのI/Oスロットリングを避けるため、直列に近い実行を強制します。
-    // F2とは異なり、Workerでは Promise.race は使用せず、直列実行でI/Oの失敗率を下げます。
-    
-    // 最大並列数を50に設定しても、実際にはブラウザが制御するため、
-    // ここでは単純なforループで直列にawaitすることで、I/O負荷を最小限にします。
-    
     for (const promise of tilePromises) {
         // 直列実行を強制
         await promise; 
     }
     return true; 
+}
+
+// ★★★ 新規ヘルパー関数: 画像ロードとImageBitmap生成をリトライする ★★★
+async function fetchImageWithRetry(url, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                // HTTPエラー（例: 500, 404）はネットワーク失敗ではないため、リトライしない
+                if (response.status !== 404) {
+                    throw new Error(`HTTP Error: ${response.status}`);
+                }
+                throw new Error(`Non-retryable Error: Status ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            // ImageBitmapの生成も失敗することがあるため、ここでImageBitmapに変換
+            const bitmap = await createImageBitmap(blob);
+            return bitmap;
+            
+        } catch (error) {
+            // "Failed to fetch" やタイムアウトなどのネットワーク失敗の場合
+            if (attempt === maxRetries) {
+                throw new Error(`Final fetch failure after ${maxRetries} attempts: ${error.message}`);
+            }
+            // 一時的なネットワークエラーの場合、短い時間待ってリトライ
+            console.warn(`Fetch attempt ${attempt} failed for ${url}. Retrying...`);
+            await new Promise(r => setTimeout(r, 500 * attempt)); // 待機時間を増やす
+        }
+    }
 }
 
 
@@ -46,33 +71,24 @@ async function renderMosaicWorker(
     // ★ 修正点1: 描画に必要な定数を関数のローカルスコープに定義
     const MIN_TILE_L = 5.0; 
     const MAX_BRIGHTNESS_RATIO = 5.0; 
-    const brightnessFactor = lightParams.brightnessCompensation / 100; // lightParamsから計算
+    const brightnessFactor = lightParams.brightnessCompensation / 100; 
 
+    // F3 Workerではfetchを使うため、直列実行でI/Oの失敗率を下げます。
     const tilePromises = []; // ロードと描画を含むPromiseを格納する配列
     
-    // ★★★ 修正点: F3 Worker内でのタイルロードロジックを修正 (I/O失敗許容) ★★★
     for (const tile of results) {
         const p = (async () => {
             let tileBitmap = null;
             let finalUrl = tile.url; 
 
             try {
-                // 1. 画像ファイルを非同期でフェッチし、Blobとして取得
-                const response = await fetch(finalUrl);
-                if (!response.ok) {
-                    // ネットワークエラーだが、Workerをクラッシュさせない
-                    throw new Error(`HTTP Error: ${response.status} or network fail`);
-                }
-                const blob = await response.blob();
+                // ★ 修正点2: リトライ機構付きのロード関数を使用
+                tileBitmap = await fetchImageWithRetry(finalUrl, 3);
                 
-                // 2. BlobからImageBitmapを生成
-                tileBitmap = await createImageBitmap(blob);
-
-                // 3. 描画ロジックの実行
+                // 描画ロジックの実行
                 let targetL = tile.targetL; 
                 let tileL = tile.tileL; 
                 
-                // (描画ロジックは変更なし)
                 if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
                 let brightnessRatio = targetL / tileL; 
                 if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
@@ -113,7 +129,7 @@ async function renderMosaicWorker(
                 ctx.filter = 'none';
 
             } catch (error) {
-                // ★ 修正点: I/Oエラーが発生した場合でも、フォールバック（単色描画）を行い、Promiseは解決する。
+                // ★ 修正点3: 最終的なロード失敗の場合のフォールバック処理（ブロックノイズ回避）
                 console.error(`Worker I/O Failed: ${finalUrl} -> ${error.message}. Drawing fallback color.`);
                 const grayValue = Math.round(tile.targetL * 2.55); 
                 ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
@@ -125,7 +141,7 @@ async function renderMosaicWorker(
         tilePromises.push(p); 
     }
 
-    // F3-AのI/Oを直列に近い形で実行し、I/Oスロットリングの失敗率を最小限にする
+    // F3-AのI/Oを直列に近い形で実行
     await runBatchedLoads(tilePromises, 10); // 念のため最大並列数を10に制限
     
     const t_render_end = performance.now();
@@ -133,6 +149,7 @@ async function renderMosaicWorker(
     ctx.restore(); // クリッピングを解除
 
     // 2段階ブレンド処理 (WorkerではImageBitmapに対して実行)
+    // (中略 - 変更なし)
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -153,23 +170,19 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     const t_start = performance.now();
     
-    // メインスレッドから転送されたデータを受け取る
     const { 
         cachedResults, mainImageBitmap, edgeImageBitmap, width, height,
         lightParams, scale, quality
     } = e.data;
     
     try {
-        // 1. Worker内でOffscreenCanvasを作成（コンテキストはまだアクティブでない）
         const highResCanvas = new OffscreenCanvas(width * scale, height * scale);
 
-        // 2. 描画処理を実行 (F3-A)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
             highResCanvas, cachedResults, mainImageBitmap, edgeImageBitmap, 
             width, height, lightParams, scale
         );
         
-        // 3. JPEGエンコード処理を実行 (F3-B)
         const t_encode_start = performance.now();
         const blob = await finalCanvas.convertToBlob({ 
             type: 'image/jpeg',
@@ -177,14 +190,12 @@ self.onmessage = async (e) => {
         });
         const t_encode_end = performance.now();
         
-        // ★ 修正点: BlobをArrayBufferに変換
         const buffer = await blob.arrayBuffer();
-        const mimeType = blob.type; // BlobのMIME Typeを取得
+        const mimeType = blob.type; 
         
         const totalTime = t_encode_end - t_start;
         const encodeTime = t_encode_end - t_encode_start;
 
-        // 4. メインスレッドに結果を返送
         self.postMessage({ 
             type: 'complete', 
             buffer: buffer, 
@@ -192,7 +203,7 @@ self.onmessage = async (e) => {
             totalTime: totalTime / 1000.0,
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0 
-        }, [buffer]); // ArrayBufferを転送リストに追加
+        }, [buffer]); 
         
     } catch (error) {
         self.postMessage({ type: 'error', message: `Full F3 Worker failed: ${error.message}` });
