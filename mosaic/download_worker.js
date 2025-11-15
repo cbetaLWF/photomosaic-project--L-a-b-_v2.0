@@ -51,14 +51,16 @@ async function renderMosaicWorker(
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
     ctx.clip(); 
 
-    // ★★★ 修正点: F2で成功したチャンク描画ロジックを移植 ★★★
-    const totalTiles = results.length;
-    const CHUNK_SIZE = 50; 
-    
-    // I/Oの並列実行制御: F3 Workerではfetchを使うため、MAX_CONCURRENT_REQUESTSで制限します
-    const MAX_CONCURRENT_REQUESTS = 50; 
-    const tilePromises = []; // ロードと描画を含むPromiseを格納する配列
+    // ★★★ 修正点1: 描画に必要な定数を関数のローカルスコープに定義 ★★★
+    const MIN_TILE_L = 5.0; 
+    const MAX_BRIGHTNESS_RATIO = 5.0; 
+    const brightnessFactor = lightParams.brightnessCompensation / 100; // lightParamsから計算
 
+    // F3 Workerではfetchを使うため、MAX_CONCURRENT_REQUESTSで制限します
+    const MAX_CONCURRENT_REQUESTS = 50; 
+    const tilePromises = [];
+    // ★★★ 修正点ここまで ★★★
+    
     // ★ 描画処理をPromiseでキューに追加し、その後 runBatchedLoads で実行を制御
     for (const tile of results) {
         const p = (async () => {
@@ -79,6 +81,8 @@ async function renderMosaicWorker(
                 // 3. 描画ロジックの実行
                 let targetL = tile.targetL; 
                 let tileL = tile.tileL; 
+                
+                // ★ 修正点: ローカルで定義された定数を利用
                 if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
                 let brightnessRatio = targetL / tileL; 
                 if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
@@ -132,9 +136,8 @@ async function renderMosaicWorker(
         tilePromises.push(p); 
     }
 
-    // ★ 修正点3: F3-AのI/Oを並列制御キューで実行
+    // F3-AのI/Oを並列制御キューで実行
     await runBatchedLoads(tilePromises, MAX_CONCURRENT_REQUESTS); 
-    // ★★★ 修正点ここまで ★★★
     
     const t_render_end = performance.now();
 
