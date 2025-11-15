@@ -29,13 +29,15 @@ function getLstar(r, g, b) {
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    // ★ blendOpacity は main.js 側で処理されるため削除
-
+    // ★ 修正: tileDataは { tileSets: ..., tiles: [...] } というオブジェクトになった
     const { 
         imageData, tileData, tileSize, width, height, 
         brightnessCompensation, textureWeight,
         startY, endY 
     } = e.data;
+    
+    // ★ 修正: 解析対象のタイルリストは tileData.tiles に格納されている
+    const tiles = tileData.tiles;
     
     const results = [];
     
@@ -44,11 +46,8 @@ self.onmessage = async (e) => {
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
     
     // ★★★ 修正点: 問題③対応 - usageCountとlastChoiceInRowをハンドラ内部に移動 ★★★
-    // これにより、Workerが再起動（再利用）されるたびにマップがリセットされ、
-    // 前回の計算結果が次の計算に影響することを防ぎます。
     const usageCount = new Map(); 
     const lastChoiceInRow = new Map();
-    // ★★★ 修正点ここまで ★★★
 
     self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
 
@@ -62,19 +61,28 @@ self.onmessage = async (e) => {
             const neighborLeft = lastChoiceInRow.get(y); 
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
-            const currentSize = Math.min(currentBlockWidth, currentBlockHeight);
+            
+            // ★ 修正: F1解析ではサムネイル(F2)の正方形クロップサイズを使う
+            // tileData.tileSets.thumb.tileWidth (例: 320)
+            // tileData.tileSets.thumb.tileHeight (例: 180)
+            const thumbW = tileData.tileSets.thumb.tileWidth;
+            const thumbH = tileData.tileSets.thumb.tileHeight;
+            const sSize = Math.min(thumbW, thumbH); // 解析時の基準サイズ (例: 180)
             
             // ( ... 3x3 L*ベクトル計算 (変更なし) ... )
-            const oneThirdX = x + Math.floor(currentSize / 3);
-            const twoThirdsX = x + Math.floor(currentSize * 2 / 3);
-            const oneThirdY = y + Math.floor(currentSize / 3);
-            const twoThirdsY = y + Math.floor(currentSize * 2 / 3);
+            // (元画像のimageDataからターゲットベクトルを計算)
+            const oneThirdX = x + Math.floor(currentBlockWidth / 3); // currentBlockWidth (例: 20px)
+            const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
+            const oneThirdY = y + Math.floor(currentBlockHeight / 3);
+            const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
+            
             const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
             let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
             let pixelCountTotal = 0;
-            for (let py = y; py < y + currentSize; py++) {
+            
+            for (let py = y; py < y + currentBlockHeight; py++) {
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
-                for (let px = x; px < x + currentSize; px++) {
+                for (let px = x; px < x + currentBlockWidth; px++) {
                     const i = (py * width + px) * 4;
                     const r = imageData.data[i]; const g = imageData.data[i + 1]; const b = imageData.data[i + 2];
                     r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
@@ -84,6 +92,7 @@ self.onmessage = async (e) => {
                 }
             }
             if (pixelCountTotal === 0) continue;
+            
             const r_avg_total = r_sum_total / pixelCountTotal;
             const g_avg_total = g_sum_total / pixelCountTotal;
             const b_avg_total = b_sum_total / pixelCountTotal;
@@ -94,9 +103,8 @@ self.onmessage = async (e) => {
             });
             
             // ( ... 最適なタイルを検索するループ ... )
-            let bestMatch = null;
-            let bestMatchUrl = null;
-            let bestMatchThumbUrl = null; // ★ 修正点1: thumb_urlを保持する変数を追加
+            let bestMatchPattern = null;
+            let bestMatchTileId = -1; // ★ 修正: URLではなくIDを保持
             let minDistance = Infinity;
             
             const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
@@ -106,8 +114,8 @@ self.onmessage = async (e) => {
             const TEXTURE_SCALE_FACTOR = 0.5;
             const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
             
-            // 6倍拡張に対応したネストループ
-            for (const tile of tileData) {
+            // ★ 修正: tileData.tiles (tiles) をループ
+            for (const tile of tiles) {
                 for (const pattern of tile.patterns) {
                     
                     // ( ... 色距離(colorDistance)の計算 (変更なし) ... )
@@ -139,7 +147,8 @@ self.onmessage = async (e) => {
                     totalDistance += fairnessPenalty; 
 
                     // ( ... 隣接ペナルティ (変更なし) ... )
-                    if (neighborLeft && tile.url === neighborLeft.url) {
+                    // ★ 修正: neighborLeft.tileId と tile.id を比較
+                    if (neighborLeft && tile.id === neighborLeft.tileId) {
                         const currentType = pattern.type;
                         const neighborType = neighborLeft.type;
                         const currentParts = currentType.split('_');
@@ -157,27 +166,28 @@ self.onmessage = async (e) => {
                     
                     if (totalDistance < minDistance) {
                         minDistance = totalDistance;
-                        bestMatch = pattern; 
-                        bestMatchUrl = tile.url; 
-                        bestMatchThumbUrl = tile.thumb_url; // ★ 修正点2: thumb_urlも保持
+                        bestMatchPattern = pattern; 
+                        bestMatchTileId = tile.id; // ★ 修正: tile.id を保持
                     }
                 } // 拡張パターン (6種) のループ終わり
-            } // タイル (tileData) のループ終わり
+            } // タイル (tileData.tiles) のループ終わり
 
             // ( ... 結果を格納するロジック ... )
-            if (bestMatch) {
+            if (bestMatchPattern) {
+                // ★ 修正: F1 (Worker) は、どのタイル(ID)を、どのパターンで、どこに描画するかの「レシピ」だけを返す
                 results.push({
-                    url: bestMatchUrl, 
-                    thumb_url: bestMatchThumbUrl, // ★ 修正点3: 結果オブジェクトにthumb_urlを追加
-                    patternType: bestMatch.type, 
+                    tileId: bestMatchTileId,            // どのタイルか
+                    patternType: bestMatchPattern.type, // どのパターンか
                     x: x, y: y,
-                    width: tileWidth, 
-                    height: tileHeight, 
-                    targetL: targetLab.l, 
-                    tileL: bestMatch.l 
+                    width: currentBlockWidth,  // 描画サイズ (例: 20px)
+                    height: currentBlockHeight, // 描画サイズ (例: 20px)
+                    targetL: targetLab.l, // 明度補正用
+                    // tileL: bestMatchPattern.l // (main.jsで取得可能なので削除してもよいが、F2描画用に残す)
+                    tileL: bestMatchPattern.l
                 });
-                usageCount.set(bestMatch.l_vector.toString(), (usageCount.get(bestMatch.l_vector.toString()) || 0) + 1);
-                lastChoiceInRow.set(y, { url: bestMatchUrl, type: bestMatch.type });
+                
+                usageCount.set(bestMatchPattern.l_vector.toString(), (usageCount.get(bestMatchPattern.l_vector.toString()) || 0) + 1);
+                lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
             }
         } // xループの終わり
 
@@ -193,7 +203,6 @@ self.onmessage = async (e) => {
         results: results, 
         width: width, 
         height: height, 
-        // ★ 変更点: blendOpacity を削除
         brightnessCompensation: brightnessCompensation 
     });
 };
