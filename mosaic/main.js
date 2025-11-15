@@ -529,7 +529,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const MAX_BRIGHTNESS_RATIO = 5.0; 
         const brightnessFactor = brightnessCompensation / 100; 
         
-        // ★★★ 修正点: I/Oスロットリング回避のため、非同期チャンク描画ロジックを実装 ★★★
+        // ★★★ 修正点: I/Oスロットリング回避のため、非同期チャンク描画ロジックに置き換え ★★★
         const CHUNK_SIZE = 50; // 一度に処理するタイル数
         
         // 非同期チャンク処理を行うPromiseを作成
@@ -537,9 +537,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             let tileIndex = 0;
 
             function processChunk() {
-                const chunkStartTime = performance.now();
-                const chunkEndTime = chunkStartTime + 100; // チャンク処理時間の目安 (100ms)
-
+                
                 for (let i = 0; i < CHUNK_SIZE && tileIndex < totalTiles; i++) {
                     const tile = results[tileIndex];
                     tileIndex++;
@@ -619,8 +617,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 全タイルが処理対象となるのを待つ
         await chunkPromise;
         
-        // ★★★ 修正点ここまで (Promise.allを置き換え) ★★★
-        
         const t_render_load_end = performance.now(); // ★ タイマー (F2 ロード完了)
         
         ctx.restore(); // クリッピングを解除
@@ -697,7 +693,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const scale = parseFloat(resolutionScaleInput ? resolutionScaleInput.value : 1.0);
                 const quality = parseInt(jpegQualityInput ? jpegQualityInput.value : 90) / 100.0; 
 
-                // ★★★ F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
+                // ★★★ 修正点: F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
