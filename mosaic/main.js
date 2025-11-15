@@ -472,8 +472,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、並列ロード制限ロジックを実装 ★★★
-    
     // (F2/F3-A共通の並列ロード制御キュー)
     async function runBatchedLoads(tilePromises, maxConcurrency) {
         const running = [];
@@ -648,6 +646,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (downloadButton) downloadButton.style.display = 'block';
         }
     }
+    // ★★★ 修正点ここまで ★★★
 
     // --- 5. ダウンロード機能 (F3) ---
     if (downloadButton) {
