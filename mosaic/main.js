@@ -178,16 +178,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     const ctx = mainCanvas.getContext('2d');
-    let tileData = null;
+    let tileData = null; // ★ 構造変更: { tileSets: ..., tiles: [...] }
     let mainImage = null;
     let workers = [];
     let edgeCanvas = null; 
     let currentRecommendations = null;
-    let cachedResults = null; 
+    let cachedResults = null; // ★ 構造変更: [ { tileId: 0, patternType: "...", x: 0, y: 0, ... }, ... ]
     let lastHeavyParams = {}; 
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     
+    // ★ 修正: スプライトシート用のグローバル変数
+    let thumbSheetImage = null; // F2 (プレビュー) 用のスプライトシート (Image)
+    let fullSheetBitmaps = []; // F3 (ダウンロード) 用のスプライトシート (ImageBitmap)
+
     let isPreviewRender = true;
     let t_worker_start = 0;
 
@@ -208,16 +212,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!response.ok) { throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。`); }
         tileData = await response.json();
         
-        // ★ 変更点: thumb_url のチェックを再追加
-        if (tileData.length === 0 || 
-            !tileData[0].patterns || 
-            !tileData[0].patterns[0].l_vector ||
-            !tileData[0].thumb_url) { 
-             throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトル/thumb_urlではありません。Analyzer Appで新しいデータを再生成してください。');
+        // ★ 修正: スプライトシート用のJSON構造を検証
+        if (!tileData || !tileData.tileSets || !tileData.tileSets.thumb || !tileData.tiles || tileData.tiles.length === 0) {
+             throw new Error('tile_data.jsonがスプライトシート形式ではありません。Analyzer Appで新しいデータを再生成してください。');
         }
         
-        statusText.textContent = `ステータス: タイルデータ (${tileData.length}枚 / ${tileData.length * (tileData[0].patterns ? tileData[0].patterns.length : 0)}パターン) ロード完了。メイン画像を選択してください。`;
-        if (mainImageInput) mainImageInput.disabled = false;
+        // ★ 修正: F2プレビュー用のサムネイル・スプライトシートを先行ロード
+        statusText.textContent = `ステータス: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) をロード中...`;
+        thumbSheetImage = new Image();
+        thumbSheetImage.onload = () => {
+            statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
+            if (mainImageInput) mainImageInput.disabled = false;
+        };
+        thumbSheetImage.onerror = () => {
+            statusText.textContent = `エラー: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) のロードに失敗しました。`;
+            console.error("Failed to load thumbnail sprite sheet.");
+        };
+        thumbSheetImage.src = tileData.tileSets.thumb.sheetUrl;
+
     } catch (error) {
         statusText.textContent = `エラー: ${error.message}`;
         console.error("Initialization Error:", error);
@@ -332,7 +344,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 3. モザイク生成開始 (キャッシュ機能 + タイマー) ---
     generateButton.addEventListener('click', () => {
-        if (!mainImage || !edgeCanvas) { /* ... */ return; }
+        if (!mainImage || !edgeCanvas || !thumbSheetImage.complete) {
+            statusText.textContent = 'エラー: メイン画像またはスプライトシートが準備できていません。';
+            return; 
+        }
         if (isGeneratingFullRes) { /* ... */ return; }
 
         terminateWorkers(); 
@@ -352,7 +367,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
         };
         
-        const isPreview = previewModeCheckbox.checked; 
+        // ★ 修正: isPreviewはF2描画時にのみ使用
+        // const isPreview = previewModeCheckbox.checked; 
 
         // ★ 修正点: 問題③対策 - タイルサイズが変更されたかを明示的にチェック
         const isTileSizeChanged = lastHeavyParams.tileSize !== currentHeavyParams.tileSize;
@@ -366,6 +382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const t_render_start = performance.now(); // ★ タイマー開始
             
+            // ★ 修正: スプライトシート描画ロジックに変更
             renderMosaic(
                 mainCanvas, 
                 cachedResults, 
@@ -374,13 +391,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 currentLightParams.blendOpacity, 
                 currentLightParams.edgeOpacity, 
                 currentLightParams.brightnessCompensation,
-                isPreview // ★ プレビューフラグを渡す
-            ).then(() => {
-                // ★ 変更点: 高速再描画（フェーズ2）の時間計測
-                const t_render_end = performance.now();
-                const renderTime = (t_render_end - t_render_start) / 1000.0;
-                if(timingLog) timingLog.textContent += `\n[キャッシュ使用] 再描画 (F2) (${isPreview ? 'Thumb' : 'Full'}): ${renderTime.toFixed(3)} 秒`;
-            });
+                1.0 // scale = 1.0
+            );
+            
+            // ★ 修正: F2描画は非同期ではなくなったため、.then() を削除
+            const t_render_end = performance.now();
+            const renderTime = (t_render_end - t_render_start) / 1000.0;
+            if(timingLog) timingLog.textContent += `\n[キャッシュ使用] 再描画 (F2): ${renderTime.toFixed(3)} 秒`;
             
             generateButton.disabled = false;
             return; 
@@ -427,6 +444,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } else if (e.data.type === 'progress') {
                     if (progressBar) { /* ... */ }
                 } else if (e.data.type === 'complete') {
+                    // ★ 修正: F1 Workerは { tileId, patternType, x, y, ... } の配列を返す
                     allResults = allResults.concat(e.data.results);
                     finishedWorkers++;
                     if (finishedWorkers === activeWorkers) {
@@ -440,6 +458,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         
                         cachedResults = allResults; 
                         
+                        // F1完了後、F2描画を実行
                         renderMosaic(
                             mainCanvas,
                             cachedResults, 
@@ -448,16 +467,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                             currentLightParams.blendOpacity, 
                             currentLightParams.edgeOpacity, 
                             currentLightParams.brightnessCompensation,
-                            isPreview // ★ プレビューフラグを渡す
+                            1.0 // scale = 1.0
                         );
                         terminateWorkers();
                     }
                 }
             };
             worker.onerror = (error) => { /* ... */ };
+            
+            // ★ 修正: mosaic_worker.js に新しい tileData 構造を渡す
             worker.postMessage({ 
                 imageData: imageData, 
-                tileData: tileData,
+                tileData: tileData, // 新しい {tileSets, tiles} 構造
                 tileSize: currentHeavyParams.tileSize,
                 width: mainImage.width,
                 height: mainImage.height,
@@ -472,39 +493,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // (F2/F3-A共通の並列ロード制御キュー - 削除)
-    async function runBatchedLoads(tilePromises, maxConcurrency) {
-        const running = [];
-
-        for (const promise of tilePromises) {
-            // 実行中の配列に新しいPromiseを追加
-            const p = promise.then(result => {
-                // Promiseが解決したら、実行中の配列から自身を削除
-                running.splice(running.indexOf(p), 1);
-                return result;
-            });
-
-            running.push(p);
-
-            // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
-            if (running.length >= maxConcurrency) {
-                await Promise.race(running);
-            }
-        }
-        // 残りのすべてのPromiseが完了するのを待つ
-        return Promise.all(running);
-    }
-    
-    async function renderMosaic(
+    // ★★★ 修正点: スプライトシート戦略に基づく F2 描画ロジック ★★★
+    // この関数は now async ではなく、高速な同期的描画（スプライトシートがロード済みのため）です。
+    // I/Oボトルネック (99秒) はここで解決されます。
+    function renderMosaic(
         targetCanvas, 
-        results, width, height,
+        results, // F1 (Worker) からの { tileId, patternType, x, y, ... } 配列
+        width, height,
         blendOpacity, edgeOpacity, brightnessCompensation, 
-        isPreview = true, // ★ プレビューフラグ
         scale = 1.0 
     ) {
         
-        isPreviewRender = isPreview; 
-
         const t_render_start = performance.now(); // ★ タイマー開始 (F2)
 
         const canvasWidth = width * scale;
@@ -515,107 +514,87 @@ document.addEventListener('DOMContentLoaded', async () => {
         const ctx = targetCanvas.getContext('2d');
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        statusText.textContent = `ステータス: タイル画像(${isPreview ? 'サムネイル' : '高画質'})を読み込み、描画中 (スケール: ${scale}x)...`;
+        statusText.textContent = `ステータス: スプライトシートからプレビューを描画中...`;
 
         ctx.save(); 
         ctx.beginPath();
         ctx.rect(0, 0, canvasWidth, canvasHeight); 
         ctx.clip(); 
 
-        let loadedCount = 0;
-        const totalTiles = results.length;
-        
         const MIN_TILE_L = 5.0; 
         const MAX_BRIGHTNESS_RATIO = 5.0; 
         const brightnessFactor = brightnessCompensation / 100; 
         
-        // ★★★ 修正点: I/Oスロットリング回避のため、非同期チャンク描画ロジックに置き換え ★★★
-        const CHUNK_SIZE = 50; // 一度に処理するタイル数
-        
-        // 非同期チャンク処理を行うPromiseを作成
-        const chunkPromise = new Promise((resolve) => {
-            let tileIndex = 0;
+        // F2（プレビュー）用のスプライトシート情報を取得
+        const thumbSet = tileData.tileSets.thumb;
+        const thumbTileW = thumbSet.tileWidth;
+        const thumbTileH = thumbSet.tileHeight;
 
-            function processChunk() {
-                
-                for (let i = 0; i < CHUNK_SIZE && tileIndex < totalTiles; i++) {
-                    const tile = results[tileIndex];
-                    tileIndex++;
-
-                    // Imageロードと描画ロジックをPromiseでラップし、即座に実行
-                    new Promise((resolveDraw) => {
-                        const img = new Image();
-                        img.onload = () => {
-                            // ロード成功時の描画ロジック
-                            
-                            // (描画ロジックの実行)
-                            let targetL = tile.targetL; 
-                            let tileL = tile.tileL; 
-                            if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
-                            let brightnessRatio = targetL / tileL; 
-                            if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
-                                brightnessRatio = MAX_BRIGHTNESS_RATIO;
-                            }
-                            const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
-                            ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-                            const sWidth = img.naturalWidth;
-                            const sHeight = img.naturalHeight;
-                            const sSize = Math.min(sWidth, sHeight);
-                            const isHorizontal = sWidth > sHeight; 
-                            const typeParts = tile.patternType.split('_'); 
-                            const cropType = typeParts[0]; 
-                            const flipType = typeParts[1]; 
-                            let sx = 0, sy = 0;
-                            if (isHorizontal) {
-                                if (cropType === "cropC") sx = Math.floor((sWidth - sSize) / 2);
-                                else if (cropType === "cropR") sx = sWidth - sSize;
-                            } else {
-                                if (cropType === "cropM") sy = Math.floor((sHeight - sSize) / 2);
-                                else if (cropType === "cropB") sy = sHeight - sSize;
-                            }
-                            const dx = tile.x * scale;
-                            const dy = tile.y * scale;
-                            const dWidth = tile.width * scale;
-                            const dHeight = tile.height * scale; 
-                            ctx.save();
-                            if (flipType === "flip1") {
-                                ctx.scale(-1, 1);
-                                ctx.drawImage(img, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
-                            } else {
-                                ctx.drawImage(img, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
-                            }
-                            ctx.restore();
-                            ctx.filter = 'none';
-                            loadedCount++;
-                            resolveDraw();
-                        };
-                        img.onerror = () => {
-                            // ロード失敗時のフォールバック処理 (F2-A)
-                            const grayValue = Math.round(tile.targetL * 2.55); 
-                            ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
-                            ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
-                            resolveDraw();
-                        };
-                        
-                        img.src = (isPreview && tile.thumb_url) ? tile.thumb_url : tile.url; // ロード開始
-                    });
-                }
-
-                if (tileIndex < totalTiles) {
-                    // まだタイルが残っている場合、次のイベントループで次のチャンクを実行
-                    setTimeout(processChunk, 0); 
-                } else {
-                    // 全てのタイルが処理対象となった
-                    resolve();
-                }
+        for (const tileResult of results) {
+            
+            const tileInfo = tileData.tiles[tileResult.tileId];
+            if (!tileInfo) {
+                console.warn(`Tile data not found for id: ${tileResult.tileId}`);
+                continue;
+            }
+            
+            // 選択されたパターン（L/C/R, flip0/1）の情報を取得
+            const pattern = tileInfo.patterns.find(p => p.type === tileResult.patternType);
+            if (!pattern) {
+                console.warn(`Pattern ${tileResult.patternType} not found for tile id: ${tileResult.tileId}`);
+                continue;
             }
 
-            // 最初のチャンク処理を開始
-            processChunk();
-        });
+            // 1. 明度補正
+            let targetL = tileResult.targetL; 
+            let tileL = pattern.l; 
+            if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
+            let brightnessRatio = targetL / tileL; 
+            if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
+                brightnessRatio = MAX_BRIGHTNESS_RATIO;
+            }
+            const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
+            ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
+            
+            // 2. 描画座標 (Canvas上の位置)
+            const dx = tileResult.x * scale;
+            const dy = tileResult.y * scale;
+            const dWidth = tileResult.width * scale;
+            const dHeight = tileResult.height * scale; 
+            
+            // 3. ソース座標 (スプライトシート上の位置)
+            const coords = tileInfo.thumbCoords;
+            
+            // 4. クロップ計算 (F1の解析ロジックと一致させる)
+            const sSize = Math.min(thumbTileW, thumbTileH);
+            const isHorizontal = thumbTileW > thumbTileH;
+            
+            let sx = coords.x; // スプライトシート上のタイル左上X
+            let sy = coords.y; // スプライトシート上のタイル左上Y
+            
+            const typeParts = tileResult.patternType.split('_'); 
+            const cropType = typeParts[0]; 
+            const flipType = typeParts[1]; 
+            
+            if (isHorizontal) {
+                if (cropType === "cropC") sx += Math.floor((thumbTileW - sSize) / 2);
+                else if (cropType === "cropR") sx += (thumbTileW - sSize);
+            } else {
+                if (cropType === "cropM") sy += Math.floor((thumbTileH - sSize) / 2);
+                else if (cropType === "cropB") sy += (thumbTileH - sSize);
+            }
 
-        // 全タイルが処理対象となるのを待つ
-        await chunkPromise;
+            // 5. 描画実行
+            ctx.save();
+            if (flipType === "flip1") {
+                ctx.scale(-1, 1);
+                ctx.drawImage(thumbSheetImage, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
+            } else {
+                ctx.drawImage(thumbSheetImage, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
+            }
+            ctx.restore();
+            ctx.filter = 'none';
+        }
         
         const t_render_load_end = performance.now(); // ★ タイマー (F2 ロード完了)
         
@@ -648,17 +627,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const totalRenderTime = (t_render_blend_end - t_render_start) / 1000.0;
         if(timingLog) {
             // isPreviewに応じてログを変更
-            timingLog.textContent += `\n描画 (F2) (${isPreview ? 'Thumb' : 'Full'}) 合計: ${totalRenderTime.toFixed(3)} 秒`;
+            timingLog.textContent += `\n描画 (F2) (Thumb) 合計: ${totalRenderTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - タイルロード/描画: ${loadTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - ブレンド/線画合成: ${blendTime.toFixed(3)} 秒`;
         }
 
         // プレビュー描画時のみ、ボタンを有効化
-        if (isPreview) {
+        if (isPreviewRender) { // F2描画時のみ
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
         }
     }
+    // ★★★ F2 修正ここまで ★★★
 
     // --- 5. ダウンロード機能 (F3) ---
     if (downloadButton) {
@@ -697,6 +677,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
+                statusText.textContent = 'ステータス: 高画質スプライトシートをロード中...';
+
+                // ★ 修正: F3用スプライトシートを全てロードし、ImageBitmap配列を作成
+                const fullSet = tileData.tileSets.full;
+                const sheetPromises = fullSet.sheetUrls.map(url => 
+                    fetch(url)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+                        return res.blob();
+                    })
+                    .then(blob => createImageBitmap(blob))
+                );
+                // fullSheetBitmaps に F3用 ImageBitmap が配列で格納される
+                fullSheetBitmaps = await Promise.all(sheetPromises);
+
                 statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
 
                 // Workerのパスが正しいことを前提に、F3 Workerを起動
@@ -720,17 +715,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                         downloadWorker.terminate();
                         mainImageBitmap.close(); // 転送後のクリーンアップ
                         if (edgeImageBitmap) edgeImageBitmap.close();
+                        // F3スプライトシートのBitmapもクリーンアップ
+                        fullSheetBitmaps.forEach(bmp => bmp.close());
+                        fullSheetBitmaps = [];
                     };
                     downloadWorker.onerror = (error) => {
                         reject(new Error(`Worker error: ${error.message}`));
                         downloadWorker.terminate();
                         mainImageBitmap.close();
                         if (edgeImageBitmap) edgeImageBitmap.close();
+                        fullSheetBitmaps.forEach(bmp => bmp.close());
+                        fullSheetBitmaps = [];
                     };
                     
                     // Workerに全データとWorker内で実行する描画関数を渡す
                     downloadWorker.postMessage({
+                        tileData: tileData, // ★ 修正: JSON全体を渡す
                         cachedResults: cachedResults,
+                        fullSheetBitmaps: fullSheetBitmaps, // ★ 修正: ImageBitmapの配列を転送
                         mainImageBitmap: mainImageBitmap, // ImageBitmapを転送
                         edgeImageBitmap: edgeImageBitmap,
                         width: mainImage.width,
@@ -738,7 +740,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         lightParams: lightParams,
                         scale: scale,
                         quality: quality
-                    }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); // 転送リスト
+                    }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), ...fullSheetBitmaps]); // 転送リスト
                 });
                 
                 const blob = await workerPromise;
@@ -750,7 +752,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const downloadRenderTime = (t_download_blob_end - t_download_start) / 1000.0;
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
-                    timingLog.textContent += `\nメインスレッド描画待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
+                    timingLog.textContent += `\nメインスレッド待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
                 }
 
                 // ( ... ファイルサイズチェックと警告 ... )
