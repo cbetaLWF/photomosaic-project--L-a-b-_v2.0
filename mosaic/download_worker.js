@@ -1,7 +1,11 @@
 // download_worker.js
 // F3処理（高解像度描画 + JPEGエンコード）を完全に実行するWorker
 
-// ★ F3-A1 (スプライトシートロード) 用のI/O制御キュー
+// ★★★ 修正点: 安定性メトリクスのためのグローバルカウンター ★★★
+let totalRetryCount = 0;
+let totalFailCount = 0;
+// ★★★ 修正点ここまで ★★★
+
 // (F2/F3-A共通の並列ロード制御キュー)
 async function runBatchedLoads(tilePromises, maxConcurrency) {
     const running = [];
@@ -25,13 +29,12 @@ async function runBatchedLoads(tilePromises, maxConcurrency) {
     return Promise.all(running);
 }
 
-// ★★★ 新規ヘルパー関数: 画像ロードとImageBitmap生成をリトライする ★★★
+// ★★★ 修正点: 画像ロード、リトライカウント、サイズ取得 ★★★
 async function fetchImageWithRetry(url, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const response = await fetch(url);
             if (!response.ok) {
-                // HTTPエラー（例: 500, 404）はネットワーク失敗ではないため、リトライしない
                 if (response.status !== 404) {
                     throw new Error(`HTTP Error: ${response.status}`);
                 }
@@ -39,18 +42,20 @@ async function fetchImageWithRetry(url, maxRetries = 3) {
             }
             
             const blob = await response.blob();
-            // ImageBitmapの生成も失敗することがあるため、ここでImageBitmapに変換
             const bitmap = await createImageBitmap(blob);
-            return bitmap;
+            
+            // ★ 修正: ビットマップとサイズを返す
+            return { bitmap: bitmap, size: blob.size }; 
             
         } catch (error) {
-            // "Failed to fetch" やタイムアウトなどのネットワーク失敗の場合
+            // ★ 修正: リトライ回数をカウント
+            totalRetryCount++; 
+            
             if (attempt === maxRetries) {
                 throw new Error(`Final fetch failure after ${maxRetries} attempts: ${error.message}`);
             }
-            // 一時的なネットワークエラーの場合、短い時間待ってリトライ
             console.warn(`Fetch attempt ${attempt} failed for ${url}. Retrying...`);
-            await new Promise(r => setTimeout(r, 500 * attempt)); // 待機時間を増やす
+            await new Promise(r => setTimeout(r, 500 * attempt)); 
         }
     }
 }
@@ -201,6 +206,10 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     const t_start = performance.now();
     
+    // ★★★ 修正点: 安定性メトリクスのリセット ★★★
+    totalRetryCount = 0;
+    totalFailCount = 0;
+    
     const { 
         tileData, // ★ 修正: JSON全体
         cachedResults, // F1の結果
@@ -219,12 +228,25 @@ self.onmessage = async (e) => {
         const t_load_start = performance.now();
         
         const fullSet = tileData.tileSets.full;
+        let totalLoadSize = 0;
+        
+        // ★ 修正: ロード処理をリトライ + サイズ取得 + 並列制御キュー
         const sheetPromises = fullSet.sheetUrls.map(url => 
-            fetchImageWithRetry(url, 3) // リトライ機構付きでロード
+            (async () => {
+                try {
+                    const result = await fetchImageWithRetry(url, 3);
+                    totalLoadSize += result.size;
+                    return result.bitmap;
+                } catch (error) {
+                    console.error(`Worker failed to load F3 sheet ${url}: ${error.message}`);
+                    totalFailCount++; // ロード失敗をカウント
+                    return null; // 失敗した場合はnullを返す
+                }
+            })()
         );
         
-        // F3スプライトシート(ImageBitmapの配列)をロード
-        const fullSheetBitmaps = await Promise.all(sheetPromises);
+        // F3スプライトシート(ImageBitmapの配列)をロード (並列数10に制限)
+        const fullSheetBitmaps = await runBatchedLoads(sheetPromises, 10);
         
         const t_load_end = performance.now();
         const loadTime = t_load_end - t_load_start;
@@ -233,7 +255,7 @@ self.onmessage = async (e) => {
         // 2. 描画処理を実行 (F3-A2)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
             highResCanvas, tileData, cachedResults, mainImageBitmap, edgeImageBitmap, 
-            fullSheetBitmaps, // ★ 修正: Worker内でロードしたBitmapを渡す
+            fullSheetBitmaps.filter(b => b !== null), // ★ 修正: 失敗した(null)シートを除外
             width, height, lightParams, scale
         );
         
@@ -251,6 +273,8 @@ self.onmessage = async (e) => {
         
         const totalTime = t_encode_end - t_start;
         const encodeTime = t_encode_end - t_encode_start;
+        const finalFileSizeMB = blob.size / 1024 / 1024;
+        const totalLoadSizeMB = totalLoadSize / 1024 / 1024;
 
         // 4. メインスレッドに結果を返送
         self.postMessage({ 
@@ -258,9 +282,14 @@ self.onmessage = async (e) => {
             buffer: buffer, 
             mimeType: mimeType,
             totalTime: totalTime / 1000.0,
-            loadTime: loadTime / 1000.0, // ★ 修正: F3-A1 (ロード時間) を追加
-            renderTime: renderTime / 1000.0, // F3-A2 (描画時間)
-            encodeTime: encodeTime / 1000.0 
+            loadTime: loadTime / 1000.0, 
+            renderTime: renderTime / 1000.0,
+            encodeTime: encodeTime / 1000.0,
+            // ★★★ 修正点: 詳細メトリクスを送信 ★★★
+            totalLoadSizeMB: totalLoadSizeMB,
+            retryCount: totalRetryCount,
+            failCount: totalFailCount,
+            finalFileSizeMB: finalFileSizeMB
         }, [buffer]); // ArrayBufferを転送リストに追加
         
     } catch (error) {
