@@ -174,15 +174,18 @@ self.onmessage = async (e) => {
 
             // ( ... 結果を格納するロジック ... )
             if (bestMatchPattern) {
-                // ★ 修正: F1 (Worker) は、どのタイル(ID)を、どのパターンで、どこに描画するかの「レシピ」だけを返す
+                // ★★★ 修正点: タイルの潰れバグを修正 ★★★
+                // 描画サイズは常にフルのタイルサイズ (tileWidth, tileHeight) を指定する。
+                // (currentBlockWidth, currentBlockHeight は分析にのみ使用)
+                // F2/F3の描画側 (main.js / download_worker.js) の ctx.clip() が
+                // Canvasの端からはみ出す部分を自動的にクリップします。
                 results.push({
-                    tileId: bestMatchTileId,            // どのタイルか
-                    patternType: bestMatchPattern.type, // どのパターンか
+                    tileId: bestMatchTileId,            
+                    patternType: bestMatchPattern.type, 
                     x: x, y: y,
-                    width: currentBlockWidth,  // 描画サイズ (例: 20px)
-                    height: currentBlockHeight, // 描画サイズ (例: 20px)
-                    targetL: targetLab.l, // 明度補正用
-                    // tileL: bestMatchPattern.l // (main.jsで取得可能なので削除してもよいが、F2描画用に残す)
+                    width: tileWidth,     // ★ 修正: currentBlockWidth ではない
+                    height: tileHeight,    // ★ 修正: currentBlockHeight ではない
+                    targetL: targetLab.l, 
                     tileL: bestMatchPattern.l
                 });
                 
