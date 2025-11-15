@@ -177,6 +177,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     
+    // ★★★ 修正点: 環境メトリクスをログの先頭に追加 ★★★
+    timingLog.textContent = ''; // ログをクリア
+    const cpuCores = navigator.hardwareConcurrency || 'N/A';
+    const deviceRam = navigator.deviceMemory || 'N/A';
+    timingLog.innerHTML = `[環境] CPUコア: ${cpuCores}, RAM: ${deviceRam} GB`;
+    // ★★★ 修正点ここまで ★★★
+    
     const ctx = mainCanvas.getContext('2d');
     let tileData = null; // ★ 構造変更: { tileSets: ..., tiles: [...] }
     let mainImage = null;
@@ -354,7 +361,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         generateButton.disabled = true;
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
-        if (timingLog) timingLog.textContent = '処理時間 (テスト用):'; // ★ ログリセット
+        
+        // ★ 修正: 環境ログを保持しつつ、以降のログをリセット
+        timingLog.innerHTML = `[環境] CPUコア: ${navigator.hardwareConcurrency || 'N/A'}, RAM: ${navigator.deviceMemory || 'N/A'} GB`; 
 
         const currentHeavyParams = {
             src: mainImage.src,
@@ -451,7 +460,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         // ★ 変更点: フェーズ1（Worker）の時間計測
                         const t_worker_end = performance.now();
                         const workerTime = (t_worker_end - t_worker_start) / 1000.0;
-                        if(timingLog) timingLog.textContent += `\nWorker 配置計算 (F1): ${workerTime.toFixed(3)} 秒`;
+                        
+                        // ★★★ 修正点: F1 処理量メトリクスをログに追加 ★★★
+                        if(timingLog) timingLog.textContent += `\n[F1] Worker 配置計算 (F1): ${workerTime.toFixed(3)} 秒 (タイル総数: ${tileData.tiles.length})`;
 
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。描画中...';
                         if (progressBar) progressBar.style.width = '100%';
@@ -493,10 +504,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // ★★★ 修正点: スプライトシート戦略に基づく F2 描画ロジック ★★★
-    // I/Oボトルネック (99秒) はここで解決されます。
-    // F2 (Thumb) 描画は非同期チャンク描画 (17秒) ではなく、同期描画 (0.1秒) に戻します
-    
     // (F2/F3-A共通の並列ロード制御キュー - 削除)
     // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
     
@@ -633,7 +640,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const totalRenderTime = (t_render_blend_end - t_render_start) / 1000.0;
         if(timingLog) {
             // isPreviewに応じてログを変更
-            timingLog.textContent += `\n描画 (F2) (Thumb) 合計: ${totalRenderTime.toFixed(3)} 秒`;
+            timingLog.textContent += `\n[F2] 描画 (F2) (Thumb) 合計: ${totalRenderTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - タイルロード/描画: ${loadTime.toFixed(3)} 秒`;
             timingLog.textContent += `\n  - ブレンド/線画合成: ${blendTime.toFixed(3)} 秒`;
         }
@@ -686,22 +693,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
 
                 // ★★★ 修正点: F3スプライトシートのロード処理をメインスレッドから削除 ★★★
-                // (ロードは F3 Worker 内で行う)
-                // fullSheetBitmaps = await Promise.all(sheetPromises); // 140秒フリーズの原因
-
+                
                 // Workerのパスが正しいことを前提に、F3 Workerを起動
                 const downloadWorker = new Worker('./download_worker.js'); 
                 
+                // ★ 修正: F3ログに必要な情報をここで取得
+                const fullSet = tileData.tileSets.full;
+
                 const workerPromise = new Promise((resolve, reject) => {
                     downloadWorker.onmessage = (e) => {
                         if (e.data.type === 'complete') {
+                            
+                            // ★★★ 修正点: F3 詳細メトリクスをログに追加 ★★★
                             if (timingLog) {
-                                // Workerから時間データを受信
-                                timingLog.textContent += `\nWorker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                timingLog.textContent += `\nWorker スプライトロード (F3-A1): ${e.data.loadTime.toFixed(3)} 秒`;
-                                timingLog.textContent += `\nWorker 描画 (F3-A2): ${e.data.renderTime.toFixed(3)} 秒`;
-                                timingLog.textContent += `\nWorker エンコード (F3-B): ${e.data.encodeTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\n  - F3-A1: スプライトシートロード: ${e.data.loadTime.toFixed(3)} 秒 (${fullSet.sheetUrls.length}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
+                                timingLog.textContent += `\n  - F3-A1: Fetchリトライ/失敗回数: ${e.data.retryCount} 回 / ${e.data.failCount} 回`;
+                                timingLog.textContent += `\n  - F3-A2: Worker 描画: ${e.data.renderTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\n  - F3-B: Worker エンコード: ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                             }
+                            // ★★★ 修正点ここまで ★★★
+                            
                             // ★ 修正点: ArrayBufferを受信し、Blobに再構築
                             const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
                             resolve(blob);
@@ -743,7 +755,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const downloadRenderTime = (t_download_blob_end - t_download_start) / 1000.0;
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
-                    timingLog.textContent += `\nメインスレッド待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
+                    timingLog.textContent += `\n[F3] メインスレッド待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
                 }
 
                 // ( ... ファイルサイズチェックと警告 ... )
