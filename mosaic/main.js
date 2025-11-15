@@ -67,9 +67,6 @@ function applySobelFilter(imageData) {
             }
             
             // 2. 賢い評価用の特徴ベクトル
-            if (magnitude > thresholds.low) {
-                detailVector.low += magnitude; 
-            }
             if (magnitude > thresholds.high) {
                 detailVector.high += magnitude;
             }
@@ -459,7 +456,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 }
             };
-            worker.onerror = (error) => { /* ... (変更なし) ... */ };
+            worker.onerror = (error) => { /* ... */ };
             worker.postMessage({ 
                 imageData: imageData, 
                 tileData: tileData,
@@ -679,30 +676,51 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 const t_download_render_end = performance.now(); // ★ タイマー (F3 描画完了)
                 
-                statusText.textContent = 'ステータス: 高画質版をJPEGに変換中...';
+                statusText.textContent = 'ステータス: JPEGエンコードをWorkerに委譲中...';
 
-                // 3. CanvasからJPEG Blobを生成
-                // ★★★ ここに手動計測コードを一時的に追加 ★★★
-                const t_encode_start = performance.now(); // ★ ここで計測開始
+                // ★★★ 修正点: F3-B (JPEGエンコード) をWorkerに委譲 ★★★
+                const downloadWorker = new Worker('download_worker.js');
+                
+                const offscreenCanvas = highResCanvas.transferToImageBitmap(); // ImageBitmapとして転送可能にする
 
-                const blob = await highResCanvas.convertToBlob({
-                    type: 'image/jpeg',
-                    quality: quality
+                const workerPromise = new Promise((resolve, reject) => {
+                    downloadWorker.onmessage = (e) => {
+                        if (e.data.type === 'complete') {
+                            if (timingLog) {
+                                // Workerからエンコード時間を報告してもらい、ログを更新
+                                timingLog.textContent += `\nWorker エンコード (F3-B): ${e.data.encodeTime.toFixed(3)} 秒`;
+                            }
+                            resolve(e.data.blob);
+                            downloadWorker.terminate();
+                        } else if (e.data.type === 'error') {
+                            reject(new Error(e.data.message));
+                            downloadWorker.terminate();
+                        }
+                    };
+                    downloadWorker.onerror = (error) => {
+                        reject(new Error(`Worker error: ${error.message}`));
+                        downloadWorker.terminate();
+                    };
+                    
+                    // WorkerにImageBitmapと品質を転送
+                    downloadWorker.postMessage({
+                        imageBitmap: offscreenCanvas,
+                        quality: quality
+                    }, [offscreenCanvas]); // ImageBitmapを転送可能オブジェクトとして渡す
                 });
+                
+                const blob = await workerPromise;
+                // ★★★ 修正点ここまで ★★★
+                
+                const t_download_blob_end = performance.now(); // ★ Worker完了時間
 
-                const t_encode_end = performance.now(); // ★ ここで計測終了
-                console.log(`[手動計測] JPEGエンコード時間: ${(t_encode_end - t_encode_start) / 1000.0} 秒`); // ★ 結果をコンソールに出力
-                // ★★★ 修正終わり ★★★
-                
-                const t_download_blob_end = performance.now(); // ★ 元の計測はそのまま
-                
                 // ★ 変更点: フェーズ3（ダウンロード）の時間計測
                 const downloadRenderTime = (t_download_render_end - t_download_start) / 1000.0;
-                const blobTime = (t_download_blob_end - t_download_render_end) / 1000.0;
+                const blobTime = (t_download_blob_end - t_download_render_end) / 1000.0; // Workerの起動から完了までの時間
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
-                    timingLog.textContent += `\nダウンロード描画 (F3): ${downloadRenderTime.toFixed(3)} 秒`;
-                    timingLog.textContent += `\nJPEG変換 (F3): ${blobTime.toFixed(3)} 秒`;
+                    timingLog.textContent += `\nダウンロード描画 (F3-A): ${downloadRenderTime.toFixed(3)} 秒`;
+                    timingLog.textContent += `\nWorker待機 (F3-B 総時間): ${blobTime.toFixed(3)} 秒`;
                 }
 
                 // ( ... ファイルサイズチェックと警告 ... )
