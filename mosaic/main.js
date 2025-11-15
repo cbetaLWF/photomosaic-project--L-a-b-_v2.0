@@ -678,8 +678,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 statusText.textContent = 'ステータス: JPEGエンコードをWorkerに委譲中...';
 
-                // ★★★ 修正点: F3-B (JPEGエンコード) をWorkerに委譲 ★★★
-                // ImageBitmapではなくOffscreenCanvas自体を転送するように修正
+                // ★★★ 修正点: F3-B (JPEGエンコード) をWorkerに委譲（F3完全Worker化の布石） ★★★
+                // Workerに渡す画像データをImageBitmapとして用意
+                const mainImageBitmap = await createImageBitmap(mainImage);
+                const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
+                
                 const downloadWorker = new Worker('./download_worker.js'); 
                 
                 const workerPromise = new Promise((resolve, reject) => {
@@ -687,25 +690,36 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (e.data.type === 'complete') {
                             if (timingLog) {
                                 // Workerからエンコード時間を報告してもらい、ログを更新
+                                timingLog.textContent += `\nWorker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
+                                timingLog.textContent += `\nWorker 描画 (F3-A): ${e.data.renderTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\nWorker エンコード (F3-B): ${e.data.encodeTime.toFixed(3)} 秒`;
                             }
                             resolve(e.data.blob);
-                            downloadWorker.terminate();
                         } else if (e.data.type === 'error') {
                             reject(new Error(e.data.message));
-                            downloadWorker.terminate();
                         }
+                        downloadWorker.terminate();
+                        mainImageBitmap.close(); // 転送完了後のクリーンアップ
+                        if (edgeImageBitmap) edgeImageBitmap.close();
                     };
                     downloadWorker.onerror = (error) => {
                         reject(new Error(`Worker error: ${error.message}`));
                         downloadWorker.terminate();
+                        mainImageBitmap.close();
+                        if (edgeImageBitmap) edgeImageBitmap.close();
                     };
                     
-                    // WorkerにOffscreenCanvasと品質を転送 (OffscreenCanvas自体はTransferable)
+                    // Workerに全データとWorker内で実行する描画関数を渡す
                     downloadWorker.postMessage({
-                        canvas: highResCanvas, // ★ 修正: OffscreenCanvas自体を渡す
+                        cachedResults: cachedResults,
+                        mainImageBitmap: mainImageBitmap, // ImageBitmapを転送
+                        edgeImageBitmap: edgeImageBitmap,
+                        width: mainImage.width,
+                        height: mainImage.height,
+                        lightParams: lightParams,
+                        scale: scale,
                         quality: quality
-                    }, [highResCanvas]); // ★ 修正: highResCanvas自体を転送リストに追加
+                    }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); // 転送リスト
                 });
                 
                 const blob = await workerPromise;
@@ -718,8 +732,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const blobTime = (t_download_blob_end - t_download_render_end) / 1000.0; // Workerの起動から完了までの時間
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
-                    timingLog.textContent += `\nダウンロード描画 (F3-A): ${downloadRenderTime.toFixed(3)} 秒`;
-                    timingLog.textContent += `\nWorker待機 (F3-B 総時間): ${blobTime.toFixed(3)} 秒`;
+                    timingLog.textContent += `\nメインスレッド描画待機 (F3-A ログ): ${downloadRenderTime.toFixed(3)} 秒`; // (この時間は実質ゼロになるはず)
+                    timingLog.textContent += `\nWorker待機 (F3 総時間): ${blobTime.toFixed(3)} 秒`;
                 }
 
                 // ( ... ファイルサイズチェックと警告 ... )
