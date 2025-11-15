@@ -28,39 +28,29 @@ function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
-/**
- * ★ 変更点: 1枚の「縮小版」サムネイルを生成する
- */
-async function createThumbnail(imageBitmap, thumbWidth, quality) {
-    // 元のアスペクト比を維持したまま、指定幅に縮小
-    const ratio = thumbWidth / imageBitmap.width;
-    const thumbHeight = Math.round(imageBitmap.height * ratio);
-    
-    const canvas = new OffscreenCanvas(thumbWidth, thumbHeight);
+// ★ 修正: 1枚の画像をリサイズし、ImageBitmapとして返す
+async function resizeImage(imageBitmap, targetWidth, targetHeight) {
+    const canvas = new OffscreenCanvas(targetWidth, targetHeight);
     const ctx = canvas.getContext('2d');
     
     ctx.drawImage(imageBitmap, 
         0, 0, imageBitmap.width, imageBitmap.height, // ソース (元画像)
-        0, 0, thumbWidth, thumbHeight               // 描画先 (縮小)
+        0, 0, targetWidth, targetHeight              // 描画先 (リサイズ)
     );
-
-    // Blob (JPEG) を非同期で生成
-    return await canvas.convertToBlob({
-        type: "image/jpeg",
-        quality: quality // 0.0 - 1.0
-    });
+    // Bitmapを返す (Blob化しない)
+    return canvas.transferToImageBitmap();
 }
 
 
-// 縦長/横長画像に対応したクロップと6パターン解析
-async function analyzeImagePatterns(imageBitmap) {
+// ★ 修正: L*a*b*解析ロジック (リサイズされたBitmap (例: 320x180) を入力とする)
+async function analyzeImagePatterns(imageBitmap) { // (例: 320x180)
     const patterns = [];
 
     const baseWidth = imageBitmap.width;
     const baseHeight = imageBitmap.height;
     
     // 1. クロップ設定 (短辺に合わせた正方形)
-    const sSize = Math.min(baseWidth, baseHeight); // ソースの正方形サイズ
+    const sSize = Math.min(baseWidth, baseHeight); // (例: 180)
     const isHorizontal = baseWidth > baseHeight; 
 
     const cropSettings = isHorizontal ? [
@@ -142,46 +132,120 @@ async function analyzeImagePatterns(imageBitmap) {
 }
 
 
-// Workerで受け取った画像データ配列を処理
+// ★★★ メイン処理: スプライトシート戦略 ★★★
 self.onmessage = async (e) => {
-    // ★ 変更点: サムネイル設定を受け取る (thumbnailSizeは最大幅)
-    const { files, thumbnailQuality, thumbnailSize } = e.data;
+    const { files, thumbnailQuality, thumbnailSize } = e.data; // thumbnailSize (F2) を 320x180 の幅(320)として流用
     
-    const jsonResults = [];
-    const thumbnailResults = [];
+    // 0. スプライトシート定義
+    const F2_WIDTH = 320;
+    const F2_HEIGHT = 180;
+    const F3_WIDTH = 1280;
+    const F3_HEIGHT = 720;
+    const MAX_SHEET_WIDTH = 4096; // 4Kテクスチャ上限 (安全マージン)
+
+    // F2 (Thumb) スプライトシートの計算 (500枚)
+    const F2_COLS = Math.floor(MAX_SHEET_WIDTH / F2_WIDTH); // 4096 / 320 = 12
+    const F2_ROWS = Math.ceil(files.length / F2_COLS);    // 500 / 12 = 42
+    const F2_SHEET_WIDTH = F2_COLS * F2_WIDTH;             // 12 * 320 = 3840
+    const F2_SHEET_HEIGHT = F2_ROWS * F2_HEIGHT;           // 42 * 180 = 7560
     
+    // F3 (Full) スプライトシートの計算 (500枚)
+    const F3_COLS = Math.floor(MAX_SHEET_WIDTH / F3_WIDTH); // 4096 / 1280 = 3
+    const F3_ROWS_PER_SHEET = Math.floor(MAX_SHEET_WIDTH / F3_HEIGHT); // 4096 / 720 = 5
+    const F3_TILES_PER_SHEET = F3_COLS * F3_ROWS_PER_SHEET; // 3 * 5 = 15
+    const F3_SHEET_COUNT = Math.ceil(files.length / F3_TILES_PER_SHEET); // 500 / 15 = 34
+    const F3_SHEET_WIDTH = F3_COLS * F3_WIDTH;             // 3 * 1280 = 3840
+    const F3_SHEET_HEIGHT = F3_ROWS_PER_SHEET * F3_HEIGHT;   // 5 * 720 = 3600
+
+    // 1. JSONデータ構造の初期化
+    const jsonOutput = {
+        tileSets: {
+            thumb: {
+                sheetUrl: "sprites/thumb_sheet.jpg",
+                tileWidth: F2_WIDTH,
+                tileHeight: F2_HEIGHT
+            },
+            full: {
+                sheetUrls: [],
+                tileWidth: F3_WIDTH,
+                tileHeight: F3_HEIGHT
+            }
+        },
+        tiles: []
+    };
+    
+    // 2. スプライトシート用Canvasの準備
+    const f2_canvas = new OffscreenCanvas(F2_SHEET_WIDTH, F2_SHEET_HEIGHT);
+    const f2_ctx = f2_canvas.getContext('2d');
+    
+    const f3_canvases = [];
+    for (let i = 0; i < F3_SHEET_COUNT; i++) {
+        // 最後のシートの高さを調整 (500枚ぴったりにするため)
+        let sheetHeight = F3_SHEET_HEIGHT;
+        if (i === F3_SHEET_COUNT - 1) {
+            const tilesLeft = files.length - (i * F3_TILES_PER_SHEET);
+            const rowsLeft = Math.ceil(tilesLeft / F3_COLS);
+            sheetHeight = rowsLeft * F3_HEIGHT;
+        }
+        const canvas = new OffscreenCanvas(F3_SHEET_WIDTH, sheetHeight);
+        f3_canvases.push(canvas);
+        jsonOutput.tileSets.full.sheetUrls.push(`sprites/full_sheet_${i}.jpg`);
+    }
+
     const totalFiles = files.length;
 
+    // 3. 全ファイルループ (解析とスプライトシート描画)
     for (let i = 0; i < totalFiles; i++) {
         const file = files[i];
         if (!file.type.startsWith('image/')) continue;
 
         try {
-            const imageBitmap = await createImageBitmap(file);
-            
-            // 1. L*ベクトルパターン(6種)を生成
-            const patterns = await analyzeImagePatterns(imageBitmap);
+            const originalBitmap = await createImageBitmap(file);
 
-            // 2. ★ 変更点: 1枚の「縮小版」サムネイルを生成
-            const thumbnailBlob = await createThumbnail(imageBitmap, thumbnailSize, thumbnailQuality);
-
-            // 1. JSON用データ
-            const originalUrl = `tiles/${file.name}`;
-            // ★ 変更点: サムネイルのパスも同じファイル名にする
-            // (Mosaic Appは /tiles/ と /tiles_thumb/ を切り替えるため)
-            const thumbUrl = originalUrl.replace('tiles/', 'tiles_thumb/');
+            // --- F2/F1処理 ---
+            // F2用 (320x180) にリサイズ
+            const f2_bitmap = await resizeImage(originalBitmap, F2_WIDTH, F2_HEIGHT);
             
-            jsonResults.push({
-                url: originalUrl, 
-                thumb_url: thumbUrl,
-                patterns: patterns 
+            // F1用 (L*ベクトル解析)
+            const patterns = await analyzeImagePatterns(f2_bitmap);
+            
+            // F2スプライトシートに描画
+            const f2_x = (i % F2_COLS) * F2_WIDTH;
+            const f2_y = Math.floor(i / F2_COLS) * F2_HEIGHT;
+            f2_ctx.drawImage(f2_bitmap, f2_x, f2_y);
+
+            // --- F3処理 ---
+            // F3用 (1280x720) にリサイズ
+            const f3_bitmap = await resizeImage(originalBitmap, F3_WIDTH, F3_HEIGHT);
+            
+            // F3スプライトシートに描画
+            const f3_sheetIndex = Math.floor(i / F3_TILES_PER_SHEET);
+            const i_in_sheet = i % F3_TILES_PER_SHEET;
+            const f3_x = (i_in_sheet % F3_COLS) * F3_WIDTH;
+            const f3_y = Math.floor(i_in_sheet / F3_COLS) * F3_HEIGHT;
+            
+            f3_canvases[f3_sheetIndex].getContext('2d').drawImage(f3_bitmap, f3_x, f3_y);
+
+            // --- JSONデータ作成 ---
+            jsonOutput.tiles.push({
+                id: i,
+                patterns: patterns,
+                thumbCoords: {
+                    sheetIndex: 0,
+                    x: f2_x,
+                    y: f2_y
+                },
+                fullCoords: {
+                    sheetIndex: f3_sheetIndex,
+                    x: f3_x,
+                    y: f3_y
+                }
             });
             
-            // 2. サムネイルBlobデータ (ZIP用)
-            thumbnailResults.push({
-                path: file.name, // ZIP内のパス (例: image001.jpg)
-                blob: thumbnailBlob
-            });
+            // メモリ解放
+            originalBitmap.close();
+            f2_bitmap.close();
+            f3_bitmap.close();
             
             self.postMessage({ type: 'progress', progress: (i + 1) / totalFiles, fileName: file.name });
 
@@ -190,12 +254,32 @@ self.onmessage = async (e) => {
         }
     }
 
-    // JSONとサムネイルBlobの両方をメインスレッドに渡す
+    // 4. スプライトシートをBlobに変換
+    const spriteSheetBlobs = [];
+    const jpegQuality = thumbnailQuality; // サムネイル品質を流用
+
+    // F2 (Thumb)
+    const f2_blob = await f2_canvas.convertToBlob({ type: "image/jpeg", quality: jpegQuality });
+    spriteSheetBlobs.push({
+        path: jsonOutput.tileSets.thumb.sheetUrl,
+        blob: f2_blob
+    });
+
+    // F3 (Full)
+    for (let i = 0; i < f3_canvases.length; i++) {
+        const f3_blob = await f3_canvases[i].convertToBlob({ type: "image/jpeg", quality: jpegQuality });
+        spriteSheetBlobs.push({
+            path: jsonOutput.tileSets.full.sheetUrls[i],
+            blob: f3_blob
+        });
+    }
+
+    // 5. メインスレッドにJSONとBlob配列を送信
     self.postMessage({ 
         type: 'complete', 
         results: {
-            json: jsonResults,
-            thumbnails: thumbnailResults
+            json: jsonOutput,
+            spriteSheets: spriteSheetBlobs
         } 
     });
 };
