@@ -646,7 +646,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (downloadButton) downloadButton.style.display = 'block';
         }
     }
-    // ★★★ 修正点ここまで ★★★
 
     // --- 5. ダウンロード機能 (F3) ---
     if (downloadButton) {
@@ -820,13 +819,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 });
 
-// ( ... 独立した downloadBlob 関数 ... )
+// ★★★ 修正点: downloadBlob関数を修正し、ダウンロードブロックを回避する ★★★
 function downloadBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
+    
+    // a.click()がブロックされる問題を回避するため、window.openを使用
+    // ただし、ダウンロード属性を維持するために一時的なリンクを作成
     a.href = url;
     a.download = fileName;
+    
+    // リンクを非表示でDOMに追加し、setTimeout(0)でクリックを遅延させることで、
+    // 非同期処理からの派生クリックのブロックを回避できる場合がある
+    // 最も信頼性の高いのは、ユーザーにリンクをクリックさせることだが、ここでは自動ダウンロードを試みる
+    
     document.body.appendChild(a);
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    a.click();
+    
+    // Chromeがダウンロード処理を完了するのを待つため、わずかに遅延させてから要素を削除
+    // 削除が早すぎるとダウンロードが中断されることがあるため、setTimeoutで囲む
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100); 
 }
