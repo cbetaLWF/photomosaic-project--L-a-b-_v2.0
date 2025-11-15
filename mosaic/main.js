@@ -473,7 +473,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (activeWorkers === 0 && mainImage.height > 0) { /* ... */ }
     });
 
-    // --- 4. 最終的なモザイクの描画 ---
+    // --- 4. 最終的なモザイクの描画 (変更なし) ---
     async function renderMosaic(
         targetCanvas, 
         results, width, height,
@@ -655,51 +655,32 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const scale = parseFloat(resolutionScaleInput ? resolutionScaleInput.value : 1.0);
                 const quality = parseInt(jpegQualityInput ? jpegQualityInput.value : 90) / 100.0; 
 
-                // 2. 高画質版は「オフスクリーンCanvas」で生成
-                const highResCanvas = new OffscreenCanvas(mainImage.width * scale, mainImage.height * scale);
-                
-                // Canvasを元画像でリセット
-                highResCanvas.getContext('2d').clearRect(0, 0, highResCanvas.width, highResCanvas.height);
-                highResCanvas.getContext('2d').drawImage(mainImage, 0, 0, highResCanvas.width, highResCanvas.height); 
-                
-                await renderMosaic(
-                    highResCanvas, // オフスクリーンCanvasに描画
-                    cachedResults, 
-                    mainImage.width, 
-                    mainImage.height, 
-                    lightParams.blendOpacity, 
-                    lightParams.edgeOpacity, 
-                    lightParams.brightnessCompensation,
-                    false, // ★ isPreview=false (高画質ロード)
-                    scale // ★ 解像度スケール
-                );
-                
-                const t_download_render_end = performance.now(); // ★ タイマー (F3 描画完了)
-                
-                statusText.textContent = 'ステータス: JPEGエンコードをWorkerに委譲中...';
-
-                // ★★★ 修正点: F3-B (JPEGエンコード) をWorkerに委譲（F3完全Worker化の布石） ★★★
-                // Workerに渡す画像データをImageBitmapとして用意
+                // ★★★ 修正点: F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
+                statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
+
+                // Workerのパスが正しいことを前提に、F3 Workerを起動
                 const downloadWorker = new Worker('./download_worker.js'); 
                 
                 const workerPromise = new Promise((resolve, reject) => {
                     downloadWorker.onmessage = (e) => {
                         if (e.data.type === 'complete') {
                             if (timingLog) {
-                                // Workerからエンコード時間を報告してもらい、ログを更新
+                                // Workerから時間データを受信
                                 timingLog.textContent += `\nWorker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\nWorker 描画 (F3-A): ${e.data.renderTime.toFixed(3)} 秒`;
                                 timingLog.textContent += `\nWorker エンコード (F3-B): ${e.data.encodeTime.toFixed(3)} 秒`;
                             }
-                            resolve(e.data.blob);
+                            // ★ 修正点: ArrayBufferを受信し、Blobに再構築
+                            const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
+                            resolve(blob);
                         } else if (e.data.type === 'error') {
                             reject(new Error(e.data.message));
                         }
                         downloadWorker.terminate();
-                        mainImageBitmap.close(); // 転送完了後のクリーンアップ
+                        mainImageBitmap.close(); // 転送後のクリーンアップ
                         if (edgeImageBitmap) edgeImageBitmap.close();
                     };
                     downloadWorker.onerror = (error) => {
@@ -728,12 +709,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const t_download_blob_end = performance.now(); // ★ Worker完了時間
 
                 // ★ 変更点: フェーズ3（ダウンロード）の時間計測
-                const downloadRenderTime = (t_download_render_end - t_download_start) / 1000.0;
-                const blobTime = (t_download_blob_end - t_download_render_end) / 1000.0; // Workerの起動から完了までの時間
+                const downloadRenderTime = (t_download_blob_end - t_download_start) / 1000.0;
                 if (timingLog) {
                     timingLog.textContent += `\n---`;
-                    timingLog.textContent += `\nメインスレッド描画待機 (F3-A ログ): ${downloadRenderTime.toFixed(3)} 秒`; // (この時間は実質ゼロになるはず)
-                    timingLog.textContent += `\nWorker待機 (F3 総時間): ${blobTime.toFixed(3)} 秒`;
+                    timingLog.textContent += `\nメインスレッド描画待機 (F3 総時間): ${downloadRenderTime.toFixed(3)} 秒`; 
                 }
 
                 // ( ... ファイルサイズチェックと警告 ... )
