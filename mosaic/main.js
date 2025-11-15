@@ -349,6 +349,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // ★★★ 修正点: F3 プリロード (バックグラウンド・ロード) 戦略 ★★★
+    
+    // (F2/F3-A共通の並列ロード制御キュー)
+    // (F2(Thumb)は1枚しかロードしないため、F3プリロード/ダウンロード専用)
+    async function runBatchedLoads(loadPromises, maxConcurrency) {
+        const running = [];
+        const results = []; // プリロードの結果を保持（デバッグ用だが、ここでは使わない）
+
+        for (const loadPromise of loadPromises) {
+            // 実行中の配列に新しいPromiseを追加
+            // loadPromiseは fetch() を返す関数
+            const p = loadPromise().then(result => {
+                // Promiseが解決したら、実行中の配列から自身を削除
+                running.splice(running.indexOf(p), 1);
+                results.push(result);
+                return result;
+            });
+
+            running.push(p);
+
+            // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
+            if (running.length >= maxConcurrency) {
+                await Promise.race(running);
+            }
+        }
+        // 残りのすべてのPromiseが完了するのを待つ
+        return Promise.all(running);
+    }
+    
     let preloadPromise = null;
     
     function startF3Preload(tileData, cachedResults) {
@@ -372,15 +400,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log(`[F3 Preload] F1完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
         // 3. プリロード (fetch) を実行
-        // (Promise.allは使わず、個々のfetchを並列で実行し、完了は待たない)
-        preloadPromise = Promise.all(
-            urlsToPreload.map(url => 
-                fetch(url).catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err))
-            )
-        );
+        // ★ 修正: Promise.allをrunBatchedLoadsに置き換え、並列数を10に制限
+        const MAX_PRELOAD_CONCURRENCY = 10;
+        
+        // runBatchedLoadsが実行する「関数の配列」を作成
+        const preloadTasks = urlsToPreload.map(url => {
+            return () => fetch(url, { mode: 'cors' }) // キャッシュを確実にする
+                         .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err));
+        });
+        
+        preloadPromise = runBatchedLoads(preloadTasks, MAX_PRELOAD_CONCURRENCY);
         
         // ログ出力
-        if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のプリロードを開始...`;
+        if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のプリロードを開始... (並列数: ${MAX_PRELOAD_CONCURRENCY})`;
     }
     // ★★★ 修正点ここまで ★★★
 
@@ -544,10 +576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、非同期チャンク描画ロジックに置き換え ★★★
-    
     // (F2/F3-A共通の並列ロード制御キュー - 削除)
-    // async function runBatchedLoads(tilePromises, maxConcurrency) { ... }
     
     async function renderMosaic(
         targetCanvas, 
