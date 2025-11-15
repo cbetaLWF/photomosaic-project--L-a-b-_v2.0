@@ -29,7 +29,8 @@ function getLstar(r, g, b) {
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    // ★ 変更点: blendOpacity を削除
+    // ★ blendOpacity は main.js 側で処理されるため削除
+
     const { 
         imageData, tileData, tileSize, width, height, 
         brightnessCompensation, textureWeight,
@@ -42,8 +43,12 @@ self.onmessage = async (e) => {
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
     
+    // ★★★ 修正点: 問題③対応 - usageCountとlastChoiceInRowをハンドラ内部に移動 ★★★
+    // これにより、Workerが再起動（再利用）されるたびにマップがリセットされ、
+    // 前回の計算結果が次の計算に影響することを防ぎます。
     const usageCount = new Map(); 
     const lastChoiceInRow = new Map();
+    // ★★★ 修正点ここまで ★★★
 
     self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
 
