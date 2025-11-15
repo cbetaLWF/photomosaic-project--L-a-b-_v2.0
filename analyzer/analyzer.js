@@ -5,10 +5,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadButton = document.getElementById('download-zip-button'); 
     const logDiv = document.getElementById('log');
     const qualitySlider = document.getElementById('thumbnail-quality');
-    const sizeSlider = document.getElementById('thumbnail-size'); // ★ 変更点
+    const sizeSlider = document.getElementById('thumbnail-size'); 
     
     let uploadedFiles = [];
-    let analysisResults = null; 
+    let analysisResults = null; // ★ 構造変更: { json: {}, spriteSheets: [] }
 
     // --- ドロップゾーンの設定 ---
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startButton.addEventListener('click', () => {
         if (uploadedFiles.length === 0) return;
         
-        logDiv.textContent = 'ログ: 解析とサムネイル生成を開始します... (Workerを使用)';
+        logDiv.textContent = 'ログ: 解析とスプライトシート生成を開始します... (Workerを使用)';
         startButton.disabled = true;
         downloadButton.disabled = true;
         analysisResults = null;
@@ -55,9 +55,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Workerを起動
         const worker = new Worker('worker.js');
 
-        // ★ 変更点: サムネイル品質とサイズをWorkerに渡す
+        // ★ 変更点: thumbnailSizeは F2 (Thumb) の幅として流用 (例: 320)
+        // ★ thumbnailQuality は F2/F3両方のスプライトシートの品質として流用
         const thumbnailQuality = parseInt(qualitySlider.value) / 100.0; // 0.0 - 1.0
-        const thumbnailSize = parseInt(sizeSlider.value); // 50 - 640
+        const thumbnailSize = parseInt(sizeSlider.value); // F2 width (320)
 
         // Workerにファイルリストと設定を送信
         worker.postMessage({ 
@@ -74,10 +75,10 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (e.data.type === 'error') {
                 logDiv.textContent += `\nERROR: ${e.data.message}`;
             } else if (e.data.type === 'complete') {
-                // JSONデータとサムネイルBlobの両方を受け取る
+                // ★ 修正: JSONオブジェクトとスプライトシートBlob配列を受け取る
                 analysisResults = e.data.results; 
                 
-                logDiv.textContent = `\n--- 解析完了 --- \n${analysisResults.json.length}個のタイルデータと、${analysisResults.thumbnails.length}個のサムネイルを生成しました。\nZIPダウンロードボタンを押してください。`;
+                logDiv.textContent = `\n--- 解析完了 --- \n${analysisResults.json.tiles.length}個のタイルデータを解析し、${analysisResults.spriteSheets.length}枚のスプライトシートを生成しました。\nZIPダウンロードボタンを押してください。`;
                 
                 downloadButton.disabled = false;
                 startButton.disabled = false;
@@ -105,15 +106,17 @@ document.addEventListener('DOMContentLoaded', () => {
             // JSZipのインスタンスを作成
             const zip = new JSZip();
 
-            // 1. JSONデータをZIPに追加
+            // 1. JSONデータをZIPに追加 (tile_data.json)
             const jsonContent = JSON.stringify(analysisResults.json, null, 2);
             zip.file('tile_data.json', jsonContent);
 
-            // 2. サムネイル画像をZIPに追加 (tiles_thumb フォルダ内)
-            const thumbFolder = zip.folder('tiles_thumb');
-            analysisResults.thumbnails.forEach(thumb => {
-                // thumb.path は "image001.jpg" のようなファイル名
-                thumbFolder.file(thumb.path, thumb.blob);
+            // 2. ★ 修正: スプライトシート画像をZIPに追加 (sprites/ フォルダ内)
+            const spriteFolder = zip.folder('sprites');
+            analysisResults.spriteSheets.forEach(sheet => {
+                // sheet.path は "sprites/thumb_sheet.jpg" や "sprites/full_sheet_0.jpg"
+                // .replace()でフォルダ名を除去し、ファイル名だけにする
+                const fileName = sheet.path.replace('sprites/', '');
+                spriteFolder.file(fileName, sheet.blob);
             });
 
             // 3. ZIPファイルをBlobとして生成
@@ -137,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             URL.revokeObjectURL(url); // オブジェクトURLを解放
             
-            logDiv.textContent += '\n★完了★ photomosaic_data.zip をダウンロードしました。\n次に、このZIPファイルを展開し、中身を /mosaic/ フォルダに配置してください。\n(tile_data.json と tiles_thumb フォルダをそのままコピー)';
+            logDiv.textContent += '\n★完了★ photomosaic_data.zip をダウンロードしました。\n次に、このZIPファイルを展開し、中身を /mosaic/ フォルダに配置してください。\n(tile_data.json と sprites フォルダをそのままコピー)';
             downloadButton.disabled = true;
 
         } catch (error) {
