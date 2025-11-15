@@ -211,9 +211,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // ★ 変更点: thumb_url のチェックを再追加
         if (tileData.length === 0 || 
             !tileData[0].patterns || 
-            tileData[0].patterns.length === 0 || 
             !tileData[0].patterns[0].l_vector ||
-            tileData[0].patterns[0].l_vector.length !== 9 ||
             !tileData[0].thumb_url) { 
              throw new Error('tile_data.jsonが古いか 6倍拡張(3x3)ベクトル/thumb_urlではありません。Analyzer Appで新しいデータを再生成してください。');
         }
@@ -474,6 +472,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
+    // ★★★ 修正点: F2のI/Oスロットリングを回避するため、並列ロード制限ロジックを実装 ★★★
+    
+    // (F2/F3-A共通の並列ロード制御キュー)
+    async function runBatchedLoads(tilePromises, maxConcurrency) {
+        const running = [];
+
+        for (const promise of tilePromises) {
+            // 実行中の配列に新しいPromiseを追加
+            const p = promise.then(result => {
+                // Promiseが解決したら、実行中の配列から自身を削除
+                running.splice(running.indexOf(p), 1);
+                return result;
+            });
+
+            running.push(p);
+
+            // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
+            if (running.length >= maxConcurrency) {
+                await Promise.race(running);
+            }
+        }
+        // 残りのすべてのPromiseが完了するのを待つ
+        return Promise.all(running);
+    }
+    
     async function renderMosaic(
         targetCanvas, 
         results, width, height,
@@ -509,10 +532,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const MAX_BRIGHTNESS_RATIO = 5.0; 
         const brightnessFactor = brightnessCompensation / 100; 
         
-        // ★★★ 修正点：F2のI/Oスロットリングを回避するため、並列ロード数を制限するロジックを実装 ★★★
-        const MAX_CONCURRENT_REQUESTS = 50; 
-        const tilePromises = []; // ロードと描画を含むPromiseを格納する一時配列
-        
+        const MAX_CONCURRENT_REQUESTS = 50; // I/Oスロットリング回避のため並列ロード数を制限
+        const tilePromises = []; 
+
         for (const tile of results) {
             const p = new Promise((resolve) => {
                 const img = new Image();
@@ -581,33 +603,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             tilePromises.push(p);
         }
 
-        // 実行を制御するキューの実装 (同時実行数の制限)
-        async function runBatchedLoads(tilePromises, maxConcurrency) {
-            const running = [];
-
-            for (const promise of tilePromises) {
-                // 実行中の配列に新しいPromiseを追加
-                const p = promise.then(result => {
-                    // Promiseが解決したら、実行中の配列から自身を削除
-                    running.splice(running.indexOf(p), 1);
-                    return result;
-                });
-
-                running.push(p);
-
-                // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
-                if (running.length >= maxConcurrency) {
-                    await Promise.race(running);
-                }
-            }
-            // 残りのすべてのPromiseが完了するのを待つ
-            return Promise.all(running);
-        }
-
         // Promise.all(promises); を置き換え、同時実行を制限して実行
         await runBatchedLoads(tilePromises, MAX_CONCURRENT_REQUESTS); 
-        
-        // ★★★ 修正点ここまで ★★★
         
         const t_render_load_end = performance.now(); // ★ タイマー (F2 ロード完了)
         
