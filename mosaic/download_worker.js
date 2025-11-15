@@ -1,9 +1,12 @@
 // download_worker.js
 // F3処理（高解像度描画 + JPEGエンコード）を完全に実行するWorker
 
-// ★ 修正点: I/Oスロットリング回避のため、並列ロード制限キューを実装
-// (前回の「直列実行」ロジックはF3-A1を179秒も遅くさせたため、
-// F2で成功した「並列実行(Race)」ロジックに戻します)
+// ★★★ 修正点: 安定性メトリクスのためのグローバルカウンター ★★★
+let totalRetryCount = 0;
+let totalFailCount = 0;
+// ★★★ 修正点ここまで ★★★
+
+// (F2/F3-A共通の並列ロード制御キュー)
 async function runBatchedLoads(tilePromises, maxConcurrency) {
     const running = [];
 
@@ -26,13 +29,12 @@ async function runBatchedLoads(tilePromises, maxConcurrency) {
     return Promise.all(running);
 }
 
-// ★★★ 新規ヘルパー関数: 画像ロードとImageBitmap生成をリトライする ★★★
+// ★★★ 修正点: 画像ロード、リトライカウント、サイズ取得 ★★★
 async function fetchImageWithRetry(url, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const response = await fetch(url);
             if (!response.ok) {
-                // HTTPエラー（例: 500, 404）はネットワーク失敗ではないため、リトライしない
                 if (response.status !== 404) {
                     throw new Error(`HTTP Error: ${response.status}`);
                 }
@@ -40,14 +42,12 @@ async function fetchImageWithRetry(url, maxRetries = 3) {
             }
             
             const blob = await response.blob();
-            // ImageBitmapの生成も失敗することがあるため、ここでImageBitmapに変換
             const bitmap = await createImageBitmap(blob);
             
             // ★ 修正: ビットマップとサイズを返す
             return { bitmap: bitmap, size: blob.size }; 
             
         } catch (error) {
-            // "Failed to fetch" やタイムアウトなどのネットワーク失敗の場合
             // ★ 修正: リトライ回数をカウント
             totalRetryCount++; 
 
@@ -56,9 +56,8 @@ async function fetchImageWithRetry(url, maxRetries = 3) {
                 totalFailCount++; 
                 throw new Error(`Final fetch failure after ${maxRetries} attempts: ${error.message}`);
             }
-            // 一時的なネットワークエラーの場合、短い時間待ってリトライ
             console.warn(`Fetch attempt ${attempt} failed for ${url}. Retrying...`);
-            await new Promise(r => setTimeout(r, 500 * attempt)); // 待機時間を増やす
+            await new Promise(r => setTimeout(r, 500 * attempt)); 
         }
     }
 }
@@ -73,7 +72,7 @@ async function renderMosaicWorker(
     results, // ★ 修正: F1のレシピ
     mainImageBitmap, 
     edgeImageBitmap, 
-    fullSheetBitmaps, // ★ 修正: ロード済みのF3スプライトシート配列
+    fullSheetBitmaps, // ★ 修正: ロード済みのF3スプライトシート (Map)
     width, height,
     lightParams, scale
 ) {
@@ -133,7 +132,7 @@ async function renderMosaicWorker(
         const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
         ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
 
-        // 2. 描画座標 (Canvas上の位置)
+        // 2. 描画座標 (Canvas上のの位置)
         const dx = tileResult.x * scale;
         const dy = tileResult.y * scale;
         const dWidth = tileResult.width * scale;
@@ -142,7 +141,9 @@ async function renderMosaicWorker(
         // 3. ソース座標 (スプライトシート上の位置)
         const coords = tileInfo.fullCoords;
         const sheetIndex = coords.sheetIndex;
-        const sourceSheet = fullSheetBitmaps[sheetIndex]; // 対応するシートBitmap
+        
+        // ★ 修正: MapからBitmapを取得
+        const sourceSheet = fullSheetBitmaps.get(sheetIndex); 
         
         // 4. クロップ計算 (F1の解析ロジックと一致させる)
         const sSize = Math.min(fullTileW, fullTileH); // 720
@@ -166,7 +167,7 @@ async function renderMosaicWorker(
 
         // 5. 描画実行
         if (!sourceSheet) {
-            // ★ 修正: .filter() を削除したため、null/undefined のチェックをここで行う
+            // ★ 修正: Mapに存在しない or ロード失敗(null) した場合のフォールバック
             console.error(`F3スプライトシート[${sheetIndex}]が見つかりません。フォールバック描画します。`);
             const grayValue = Math.round(tileResult.targetL * 2.55); 
             ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
@@ -218,7 +219,7 @@ self.onmessage = async (e) => {
     const { 
         tileData, // ★ 修正: JSON全体
         cachedResults, // F1の結果
-        // fullSheetBitmaps, // ★ 修正: メインスレッドからは渡されない
+        requiredSheetIndices, // ★ 修正: 必須シートリスト
         mainImageBitmap, 
         edgeImageBitmap, 
         width, height,
@@ -229,29 +230,35 @@ self.onmessage = async (e) => {
         // 1. Worker内でOffscreenCanvasを作成
         const highResCanvas = new OffscreenCanvas(width * scale, height * scale);
 
-        // ★★★ 修正: F3-A1 (スプライトシートロード) を Worker 内部で実行 ★★★
+        // ★★★ 修正: F3-A1 (オンデマンド・スプライトシートロード) ★★★
         const t_load_start = performance.now();
         
         const fullSet = tileData.tileSets.full;
         let totalLoadSize = 0;
+        const fullSheetBitmaps = new Map(); // ★ 修正: Mapを使用
         
-        // ★ 修正: ロード処理をリトライ + サイズ取得 + 並列制御キュー
-        const sheetPromises = fullSet.sheetUrls.map(url => 
+        // ★ 修正: 必須リスト (requiredSheetIndices) に基づいてロード
+        const sheetPromises = requiredSheetIndices.map(index => 
             (async () => {
+                const url = fullSet.sheetUrls[index];
+                if (!url) {
+                    console.error(`No URL found for sheet index ${index}`);
+                    return; // スキップ
+                }
+                
                 try {
                     const result = await fetchImageWithRetry(url, 3);
                     totalLoadSize += result.size;
-                    return result.bitmap;
+                    fullSheetBitmaps.set(index, result.bitmap); // ★ 修正: Mapにインデックスで格納
                 } catch (error) {
                     console.error(`Worker failed to load F3 sheet ${url}: ${error.message}`);
                     // totalFailCountはfetchImageWithRetry内でカウントされる
-                    return null; // 失敗した場合はnullを返す
                 }
             })()
         );
         
         // ★ 修正: F3-A1のI/Oスロットリングを回避するため、並列数を50に設定
-        const fullSheetBitmaps = await runBatchedLoads(sheetPromises, 50);
+        await runBatchedLoads(sheetPromises, 50);
         
         const t_load_end = performance.now();
         const loadTime = t_load_end - t_load_start;
@@ -260,7 +267,7 @@ self.onmessage = async (e) => {
         // 2. 描画処理を実行 (F3-A2)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
             highResCanvas, tileData, cachedResults, mainImageBitmap, edgeImageBitmap, 
-            fullSheetBitmaps, // ★ 修正: .filter() を削除し、nullを含む配列を渡す
+            fullSheetBitmaps, // ★ 修正: Mapを渡す
             width, height, lightParams, scale
         );
         
@@ -291,6 +298,7 @@ self.onmessage = async (e) => {
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0,
             // ★★★ 修正点: 詳細メトリクスを送信 ★★★
+            sheetCount: requiredSheetIndices.length, // ★ 修正: 実際にロードした枚数
             totalLoadSizeMB: totalLoadSizeMB,
             retryCount: totalRetryCount,
             failCount: totalFailCount,
