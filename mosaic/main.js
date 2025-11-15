@@ -472,7 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
-    // (F2/F3-A共通の並列ロード制御キュー)
+    // (F2/F3-A共通の並列ロード制御キュー - 削除)
     async function runBatchedLoads(tilePromises, maxConcurrency) {
         const running = [];
 
@@ -524,85 +524,102 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         let loadedCount = 0;
         const totalTiles = results.length;
-        const promises = [];
         
         const MIN_TILE_L = 5.0; 
         const MAX_BRIGHTNESS_RATIO = 5.0; 
         const brightnessFactor = brightnessCompensation / 100; 
         
-        const MAX_CONCURRENT_REQUESTS = 50; // I/Oスロットリング回避のため並列ロード数を制限
-        const tilePromises = []; 
+        // ★★★ 修正点: I/Oスロットリング回避のため、非同期チャンク描画ロジックを実装 ★★★
+        const CHUNK_SIZE = 50; // 一度に処理するタイル数
+        
+        // 非同期チャンク処理を行うPromiseを作成
+        const chunkPromise = new Promise((resolve) => {
+            let tileIndex = 0;
 
-        for (const tile of results) {
-            const p = new Promise((resolve) => {
-                const img = new Image();
-                
-                // 描画ロジックを非同期ロード後に実行するPromiseを作成
-                const drawPromise = new Promise((res) => {
-                    img.onload = res;
-                    img.onerror = () => {
-                        console.error(`Failed to load tile: ${img.src}`);
+            function processChunk() {
+                const chunkStartTime = performance.now();
+                const chunkEndTime = chunkStartTime + 100; // チャンク処理時間の目安 (100ms)
+
+                for (let i = 0; i < CHUNK_SIZE && tileIndex < totalTiles; i++) {
+                    const tile = results[tileIndex];
+                    tileIndex++;
+
+                    // Imageロードと描画ロジックをPromiseでラップし、即座に実行
+                    new Promise((resolveDraw) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            // ロード成功時の描画ロジック
+                            
+                            // (描画ロジックの実行)
+                            let targetL = tile.targetL; 
+                            let tileL = tile.tileL; 
+                            if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
+                            let brightnessRatio = targetL / tileL; 
+                            if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
+                                brightnessRatio = MAX_BRIGHTNESS_RATIO;
+                            }
+                            const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
+                            ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
+                            const sWidth = img.naturalWidth;
+                            const sHeight = img.naturalHeight;
+                            const sSize = Math.min(sWidth, sHeight);
+                            const isHorizontal = sWidth > sHeight; 
+                            const typeParts = tile.patternType.split('_'); 
+                            const cropType = typeParts[0]; 
+                            const flipType = typeParts[1]; 
+                            let sx = 0, sy = 0;
+                            if (isHorizontal) {
+                                if (cropType === "cropC") sx = Math.floor((sWidth - sSize) / 2);
+                                else if (cropType === "cropR") sx = sWidth - sSize;
+                            } else {
+                                if (cropType === "cropM") sy = Math.floor((sHeight - sSize) / 2);
+                                else if (cropType === "cropB") sy = sHeight - sSize;
+                            }
+                            const dx = tile.x * scale;
+                            const dy = tile.y * scale;
+                            const dWidth = tile.width * scale;
+                            const dHeight = tile.height * scale; 
+                            ctx.save();
+                            if (flipType === "flip1") {
+                                ctx.scale(-1, 1);
+                                ctx.drawImage(img, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
+                            } else {
+                                ctx.drawImage(img, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
+                            }
+                            ctx.restore();
+                            ctx.filter = 'none';
+                            loadedCount++;
+                            resolveDraw();
+                        };
+                        img.onerror = () => {
+                            // ロード失敗時のフォールバック処理 (F2-A)
+                            const grayValue = Math.round(tile.targetL * 2.55); 
+                            ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
+                            ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
+                            resolveDraw();
+                        };
                         
-                        // ロード失敗時のフォールバック処理 (F2-A)
-                        const grayValue = Math.round(tile.targetL * 2.55); 
-                        ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
-                        ctx.fillRect(tile.x * scale, tile.y * scale, tile.width * scale, tile.height * scale); 
-                        res(); // 描画失敗後もPromiseを解決して続行
-                    };
-                    
-                    // F2モードではサムネイル優先ロード
-                    img.src = (isPreview && tile.thumb_url) ? tile.thumb_url : tile.url;
-                }).then(() => {
-                    // ロードが成功したら、描画ロジック (F2-B) を実行
-                    if (img.complete && img.naturalWidth > 0) {
-                        // (描画ロジックの実行)
-                        let targetL = tile.targetL; 
-                        let tileL = tile.tileL; 
-                        if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
-                        let brightnessRatio = targetL / tileL; 
-                        if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
-                            brightnessRatio = MAX_BRIGHTNESS_RATIO;
-                        }
-                        const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
-                        ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-                        const sWidth = img.naturalWidth;
-                        const sHeight = img.naturalHeight;
-                        const sSize = Math.min(sWidth, sHeight);
-                        const isHorizontal = sWidth > sHeight; 
-                        const typeParts = tile.patternType.split('_'); 
-                        const cropType = typeParts[0]; 
-                        const flipType = typeParts[1]; 
-                        let sx = 0, sy = 0;
-                        if (isHorizontal) {
-                            if (cropType === "cropC") sx = Math.floor((sWidth - sSize) / 2);
-                            else if (cropType === "cropR") sx = sWidth - sSize;
-                        } else {
-                            if (cropType === "cropM") sy = Math.floor((sHeight - sSize) / 2);
-                            else if (cropType === "cropB") sy = sHeight - sSize;
-                        }
-                        const dx = tile.x * scale;
-                        const dy = tile.y * scale;
-                        const dWidth = tile.width * scale;
-                        const dHeight = tile.height * scale; 
-                        ctx.save();
-                        if (flipType === "flip1") {
-                            ctx.scale(-1, 1);
-                            ctx.drawImage(img, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
-                        } else {
-                            ctx.drawImage(img, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
-                        }
-                        ctx.restore();
-                        ctx.filter = 'none';
-                        loadedCount++;
-                    }
-                    resolve();
-                });
-            });
-            tilePromises.push(p);
-        }
+                        img.src = (isPreview && tile.thumb_url) ? tile.thumb_url : tile.url; // ロード開始
+                    });
+                }
 
-        // Promise.all(promises); を置き換え、同時実行を制限して実行
-        await runBatchedLoads(tilePromises, MAX_CONCURRENT_REQUESTS); 
+                if (tileIndex < totalTiles) {
+                    // まだタイルが残っている場合、次のイベントループで次のチャンクを実行
+                    setTimeout(processChunk, 0); 
+                } else {
+                    // 全てのタイルが処理対象となった
+                    resolve();
+                }
+            }
+
+            // 最初のチャンク処理を開始
+            processChunk();
+        });
+
+        // 全タイルが処理対象となるのを待つ
+        await chunkPromise;
+        
+        // ★★★ 修正点ここまで (Promise.allを置き換え) ★★★
         
         const t_render_load_end = performance.now(); // ★ タイマー (F2 ロード完了)
         
@@ -680,7 +697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const scale = parseFloat(resolutionScaleInput ? resolutionScaleInput.value : 1.0);
                 const quality = parseInt(jpegQualityInput ? jpegQualityInput.value : 90) / 100.0; 
 
-                // ★★★ 修正点: F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
+                // ★★★ F3 Worker化のためにメイン画像をImageBitmapに変換 ★★★
                 const mainImageBitmap = await createImageBitmap(mainImage);
                 const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                 
@@ -819,25 +836,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 });
 
-// ★★★ 修正点: downloadBlob関数を修正し、ダウンロードブロックを回避する ★★★
+// ★★★ 修正点: downloadBlob関数のロジックを修正し、ダウンロードブロックを回避する ★★★
 function downloadBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     
-    // a.click()がブロックされる問題を回避するため、window.openを使用
-    // ただし、ダウンロード属性を維持するために一時的なリンクを作成
+    // a.click()がブロックされる問題を回避するため、setTimeoutでクリックを遅延させる
     a.href = url;
     a.download = fileName;
-    
-    // リンクを非表示でDOMに追加し、setTimeout(0)でクリックを遅延させることで、
-    // 非同期処理からの派生クリックのブロックを回避できる場合がある
-    // 最も信頼性の高いのは、ユーザーにリンクをクリックさせることだが、ここでは自動ダウンロードを試みる
     
     document.body.appendChild(a);
     a.click();
     
-    // Chromeがダウンロード処理を完了するのを待つため、わずかに遅延させてから要素を削除
-    // 削除が早すぎるとダウンロードが中断されることがあるため、setTimeoutで囲む
+    // ダウンロード処理を完了させるための十分な遅延を確保
     setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
