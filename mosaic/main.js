@@ -116,6 +116,24 @@ function analyzeImageAndGetRecommendations(image, analysisImageData) {
 // ヘルパー関数ここまで
 
 
+// ★ 修正点: ダウンロードアドバイスのためのヘルパー関数
+function highlightParameter(element) {
+    if (!element) return;
+    element.style.borderColor = '#dc2626'; // Red-600
+    element.style.borderWidth = '2px';
+    element.style.boxShadow = '0 0 5px rgba(220, 38, 38, 0.5)';
+}
+function resetParameterStyles(elements) {
+    elements.forEach(element => {
+        if (element) {
+            element.style.borderColor = '';
+            element.style.borderWidth = '';
+            element.style.boxShadow = '';
+        }
+    });
+}
+
+
 document.addEventListener('DOMContentLoaded', async () => {
     // --- UI要素の取得 ---
     const mainImageInput = document.getElementById('main-image-input');
@@ -271,7 +289,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // ★ 修正点: 問題②対応 - applyRecommendationsButton リスナーの実装 (変更なし)
+    // ★ 修正点: 問題②対応 - applyRecommendationsButton リスナーの実装
     if (applyRecommendationsButton) {
         applyRecommendationsButton.addEventListener('click', () => {
             if (!currentRecommendations) return;
@@ -609,7 +627,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 5. ダウンロード機能 (JPEG & 警告対応) ---
     if (downloadButton) {
+        // ダウンロードパラメータを配列にまとめる (アドバイス機能用)
+        const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
+
         downloadButton.addEventListener('click', async () => {
+            // ダウンロード開始時にパラメータ強調をリセット
+            resetParameterStyles(allDownloadParams);
+            
             if (isGeneratingFullRes) return; 
             if (!cachedResults || !mainImage) { /* ... */ return; }
 
@@ -637,11 +661,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 2. 高画質版は「オフスクリーンCanvas」で生成
                 const highResCanvas = new OffscreenCanvas(mainImage.width * scale, mainImage.height * scale);
                 
-                // ★★★ 最終修正点: Workerに渡すImageData取得前にCanvasを元画像で上書きし、ピクセルデータの汚染を防ぐ ★★★
-                highResCanvas.getContext('2d').clearRect(0, 0, mainImage.width, mainImage.height);
-                highResCanvas.getContext('2d').drawImage(mainImage, 0, 0, mainImage.width * scale, mainImage.height * scale); 
-                // (Workerに渡すImageDataはメインスレッドのCanvasから取得するが、ダウンロード用Canvasのベースも元画像である必要があるため、元画像を描画)
-                // ★★★ 最終修正点ここまで（mainCanvasのリセットは不要、WorkerへのImageDataは既に修正済みのため） ★★★
+                // Canvasを元画像でリセット
+                highResCanvas.getContext('2d').clearRect(0, 0, highResCanvas.width, highResCanvas.height);
+                highResCanvas.getContext('2d').drawImage(mainImage, 0, 0, highResCanvas.width, highResCanvas.height); 
                 
                 await renderMosaic(
                     highResCanvas, // オフスクリーンCanvasに描画
@@ -683,6 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     statusText.textContent = `ステータス: 高画質版 ( ${fileSizeMB.toFixed(1)} MB) の準備完了。`;
                     downloadBlob(blob, `photomosaic-${Date.now()}.jpg`);
                 } else {
+                    // ★ 修正点: Blobを保持し、警告を表示
                     lastGeneratedBlob = blob; 
                     downloadWarningMessage.textContent = `警告: ファイルサイズが ${fileSizeMB.toFixed(1)} MB となり、X/Twitterの上限(15MB)を超えています。このままダウンロードしますか？`;
                     downloadWarningArea.style.display = 'block';
@@ -696,15 +719,61 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // ( ... 完了処理 ... )
                 isGeneratingFullRes = false;
                 generateButton.disabled = false;
-                downloadButton.disabled = false;
-                if (downloadSpinner) downloadSpinner.style.display = 'none';
+                // ダウンロード警告が表示されている場合、ボタンは有効にしない
+                if (downloadWarningArea.style.display !== 'block') {
+                     downloadButton.disabled = false;
+                }
             }
         });
     }
 
-    // ( ... 警告Yes/Noボタンのリスナー ... )
-    if (warningYesButton) { /* ... */ }
-    if (warningNoButton) { /* ... */ }
+    // --- 6. 警告ボタンのリスナー ---
+    if (warningYesButton && warningNoButton) {
+        const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
+        
+        // Yesボタン: ダウンロード続行
+        warningYesButton.addEventListener('click', () => {
+            if (!lastGeneratedBlob) return;
+            downloadWarningArea.style.display = 'none';
+            resetParameterStyles(allDownloadParams);
+
+            // ダウンロードを再開（Blobは lastGeneratedBlob に格納済み）
+            downloadBlob(lastGeneratedBlob, `photomosaic-${Date.now()}.jpg`);
+            
+            statusText.textContent = 'ステータス: 警告を無視してダウンロードを実行しました。';
+            
+            // UIを元に戻す
+            generateButton.disabled = false;
+            downloadButton.disabled = false;
+        });
+
+        // Noボタン: キャンセルとアドバイス
+        warningNoButton.addEventListener('click', () => {
+            downloadWarningArea.style.display = 'none';
+            resetParameterStyles(allDownloadParams); // 念のためスタイルリセット
+
+            const currentScale = parseFloat(resolutionScaleInput.value);
+            const currentQuality = parseInt(jpegQualityInput.value);
+
+            // 1. アドバイスロジック
+            const newScale = Math.max(1.0, currentScale - 0.5); 
+            const newQuality = Math.max(70, currentQuality - 10); 
+
+            let advice = 'ダウンロードをキャンセルしました。15MBの制限を超えるため、以下のパラメータを変更し、再生成してください:\n';
+            advice += ` - 💡 **解像度スケール**を現在の ${currentScale.toFixed(1)}x から **${newScale.toFixed(1)}x** に下げてみてください。（ファイルサイズへの影響が最大です）\n`;
+            advice += ` - 📷 または **JPEG 品質**を現在の ${currentQuality}% から **${newQuality}%** に下げてみてください。\n`;
+
+            statusText.textContent = advice;
+            
+            // 2. UIの強調 (アドバイス対象のスライダーを強調)
+            highlightParameter(resolutionScaleInput);
+            highlightParameter(jpegQualityInput);
+
+            // 3. 完了処理 (ダウンロードボタンを再有効化)
+            generateButton.disabled = false;
+            downloadButton.disabled = false;
+        });
+    }
 
 });
 
