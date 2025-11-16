@@ -1,5 +1,35 @@
 // download_worker.js
-// Hプラン: 無限ループ対策
+// Hプラン: tileData を fetch
+
+// ★ 修正: tileData をWorker内でキャッシュする
+let tileDataCache = null;
+
+/**
+ * tile_data.json を fetch し、キャッシュする
+ */
+async function getTileData(logPrefix) {
+    if (tileDataCache) {
+        return tileDataCache;
+    }
+    
+    // ★ 修正: F3用のステータス報告
+    self.postMessage({ type: 'status', message: `${logPrefix} tile_data.json を fetch 中...` });
+    
+    const response = await fetch('tile_data.json'); // Worker自身がfetch
+    if (!response.ok) {
+        throw new Error(`Worker Error: tile_data.json の fetch に失敗しました (${response.status})`);
+    }
+    tileDataCache = await response.json();
+    
+    // fetchしたデータを検証
+    if (!tileDataCache || !tileDataCache.tiles || tileDataCache.tiles.length === 0) {
+         throw new Error('Worker Error: fetch した tile_data.json が不正か空です。');
+    }
+    
+    self.postMessage({ type: 'status', message: `${logPrefix} tile_data.json 読込完了。` });
+    return tileDataCache;
+}
+
 
 // ( ... L*a*b*ヘルパー関数群 (変更なし) ... )
 // ( ... runF1Calculation (F1計算) 関数 (変更なし) ... )
@@ -29,6 +59,9 @@ function getLstar(r, g, b) {
 function runF1Calculation(
     imageDataArray, tileData, tileSize, width, height, textureWeight
 ) {
+    // ★ 修正: F3用のステータス報告 ★
+    self.postMessage({ type: 'status', message: `F3 (F1計算) を開始...` });
+    
     const tiles = tileData.tiles;
     const results = [];
     const ASPECT_RATIO = 1.0; 
@@ -150,6 +183,9 @@ async function renderMosaicWorker(
     width, height,
     lightParams, scale
 ) {
+    // ★ 修正: F3用のステータス報告 ★
+    self.postMessage({ type: 'status', message: `F3 高解像度描画（タイル描画）を開始...` });
+
     const t_render_start = performance.now(); 
     const canvasWidth = width * scale;
     const canvasHeight = height * scale;
@@ -222,6 +258,10 @@ async function renderMosaicWorker(
     }
     const t_render_end = performance.now();
     ctx.restore(); 
+
+    // ★ 修正: F3用のステータス報告 ★
+    self.postMessage({ type: 'status', message: `F3 高解像度描画（ブレンド処理）を開始...` });
+
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -240,12 +280,15 @@ async function renderMosaicWorker(
 
 self.onmessage = async (e) => {
     
-    // ★★★ 修正: 処理全体を try...catch で囲む ★★★
     try {
+        // ★ 修正: F3用のステータス報告 ★
+        self.postMessage({ type: 'status', message: `F3 Worker 起動。必須データを検証中...` });
+        
         const t_start = performance.now();
         
+        // ★★★ 修正: tileData を e.data から削除 ★★★
         const { 
-            tileData,
+            /* tileData, */
             imageDataArray, tileSize, textureWeight,
             sheetBitmaps,
             mainImageBitmap, 
@@ -258,20 +301,22 @@ self.onmessage = async (e) => {
         if (!imageDataArray) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
         }
-        if (!tileData) {
-            throw new Error("Worker Error: 'tileData' (JSON) が main.js から渡されませんでした。");
-        }
         if (!sheetBitmaps || sheetBitmaps.size === 0) {
             throw new Error("Worker Error: 'sheetBitmaps' (F3スプライトシートMap) が main.js から渡されませんでした。");
         }
         if (!mainImageBitmap) {
             throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
         }
-        
-        // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
         if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
+        
+        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
+        const t_json_fetch_start = performance.now();
+        const tileData = await getTileData("F3:");
+        const t_json_fetch_end = performance.now();
+        const jsonFetchTime = t_json_fetch_end - t_json_fetch_start;
+
         
         const highResCanvas = new OffscreenCanvas(width * scale, height * scale);
 
@@ -286,7 +331,7 @@ self.onmessage = async (e) => {
             throw new Error("F1 re-calculation failed or produced no results.");
         }
         const t_f1_end = performance.now();
-        const f1Time = t_f1_end - t_f1_start; 
+        const f1CalcTime = t_f1_end - t_f1_start; 
 
         // 2. 描画処理を実行 (F3-A2)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
@@ -296,6 +341,9 @@ self.onmessage = async (e) => {
         );
         
         // 3. JPEGエンコード処理を実行 (F3-B)
+        // ★ 修正: F3用のステータス報告 ★
+        self.postMessage({ type: 'status', message: `F3 JPEGエンコードを開始...` });
+        
         const t_encode_start = performance.now();
         const blob = await finalCanvas.convertToBlob({ 
             type: 'image/jpeg',
@@ -316,7 +364,8 @@ self.onmessage = async (e) => {
             buffer: buffer, 
             mimeType: mimeType,
             totalTime: totalTime / 1000.0,
-            loadTime: f1Time / 1000.0,
+            jsonFetchTime: jsonFetchTime / 1000.0, // ★ 修正
+            f1CalcTime: f1CalcTime / 1000.0,   // ★ 修正
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0,
             sheetCount: sheetBitmaps.size, 
@@ -326,20 +375,18 @@ self.onmessage = async (e) => {
             finalFileSizeMB: finalFileSizeMB
         }, [buffer]); 
         
-    // ★★★ 修正: catch ブロックを追加 ★★★
     } catch (error) {
+        // ( ... catchブロック (変更なし) ... )
         let detailedMessage = `F3 Download Worker CRASH: ${error.message}\n`;
         if (error.stack) {
             detailedMessage += `Stack: ${error.stack}`;
         }
-        
         if (error.message.includes("Cannot read properties of null") || error.message.includes("undefined")) {
             detailedMessage += "\nHint: 'imageDataArray' または 'tileData' が null または undefined のまま使用されようとしました。";
         }
         if (error.message.includes("Invalid tile size")) {
              detailedMessage += "\nHint: タイルサイズに 0 または NaN が指定されました。";
         }
-        
         self.postMessage({ 
             type: 'error', 
             message: detailedMessage
