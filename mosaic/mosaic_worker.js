@@ -1,9 +1,7 @@
-// mosaic_worker.js (F1:計算 + F2:プレビュー描画 ハイブリッド)
+// mosaic_worker.js (Hプラン: 無限ループ対策)
 
-// ( ... L*a*b*ヘルパー関数群 ... )
-// ( ... renderMosaicPreview (F2描画) 関数 ... )
-// (上記2つは変更なし)
-
+// ( ... L*a*b*ヘルパー関数群 (変更なし) ... )
+// ( ... renderMosaicPreview (F2描画) 関数 (変更なし) ... )
 const REF_X = 95.047; // D65
 const REF_Y = 100.000;
 const REF_Z = 108.883;
@@ -29,10 +27,10 @@ function getLstar(r, g, b) {
 async function renderMosaicPreview(
     canvas, 
     tileData, 
-    results, // F1の計算結果 (ローカル)
+    results, 
     mainImageBitmap, 
     edgeImageBitmap, 
-    thumbSheetBitmap, // F2用のサムネイルBitmap
+    thumbSheetBitmap, 
     width, height,
     lightParams
 ) {
@@ -98,7 +96,7 @@ async function renderMosaicPreview(
         ctx.filter = 'none';
     }
     const t_render_tile_end = performance.now();
-    ctx.restore(); // クリッピングを解除
+    ctx.restore(); 
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -150,13 +148,16 @@ self.onmessage = async (e) => {
         if (!lightParams) {
             throw new Error("Worker Error: 'lightParams' (描画パラメータ) が main.js から渡されませんでした。");
         }
+        
+        // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
+        if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
+            throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
+        }
 
         const tiles = tileData.tiles;
         
         let results = []; 
         let f1Time = 0;
-        
-        // (F1スキップロジックは Hプランで削除済み)
         
         // F1計算を通常実行
         const ASPECT_RATIO = 1.0; 
@@ -194,11 +195,9 @@ self.onmessage = async (e) => {
                     const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                     for (let px = x; px < x + currentBlockWidth; px++) {
                         const i = (py * width + px) * 4;
-                        
                         const r = imageDataArray[i]; 
                         const g = imageDataArray[i + 1]; 
                         const b = imageDataArray[i + 2];
-                        
                         r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
                         const col = (px < oneThirdX) ? 0 : (px < twoThirdsX ? 1 : 2);
                         const gridIndex = row * 3 + col;
@@ -291,15 +290,11 @@ self.onmessage = async (e) => {
         const t_f1_end = performance.now();
         f1Time = (t_f1_end - t_f1_start) / 1000.0;
         
-        // (IndexedDB保存ロジックは Hプランで削除済み)
-        
-        // ★ F2描画を開始
         self.postMessage({ type: 'status', message: `F2プレビュー描画中...` });
         
         const t_f2_start = performance.now();
         const previewCanvas = new OffscreenCanvas(width, height);
 
-        // F2描画処理を実行
         const { tileTime, blendTime } = await renderMosaicPreview(
             previewCanvas, tileData, results,
             mainImageBitmap, edgeImageBitmap, 
@@ -312,7 +307,6 @@ self.onmessage = async (e) => {
         
         const f2Time = (t_f2_end - t_f2_start) / 1000.0;
 
-        // メインスレッドに結果を返送
         self.postMessage({ 
             type: 'complete', 
             bitmap: finalBitmap,
@@ -327,15 +321,16 @@ self.onmessage = async (e) => {
 
     // ★★★ 修正: catch ブロックを追加 ★★★
     } catch (error) {
-        // クラッシュした場合、メインスレッドに詳細なエラーを報告する
         let detailedMessage = `F1/F2 Worker CRASH: ${error.message}\n`;
         if (error.stack) {
             detailedMessage += `Stack: ${error.stack}`;
         }
         
-        // 過去のバグに基づき、具体的なヒントを追加
         if (error.message.includes("Cannot read properties of null") || error.message.includes("undefined")) {
             detailedMessage += "\nHint: 'imageDataArray' または 'tileData' が null または undefined のまま使用されようとしました。";
+        }
+        if (error.message.includes("Invalid tile size")) {
+             detailedMessage += "\nHint: タイルサイズに 0 または NaN が指定されました。";
         }
         if (error.name === 'ReferenceError') {
             detailedMessage += "\nHint: 'idbKeyval' のような未定義の変数や関数が呼び出されました。";
