@@ -494,7 +494,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // ( ... チャンク分けロジック ... )
         const tileSize = currentHeavyParams.tileSize; 
         const tileHeight = Math.round(tileSize * 1.0); 
-        if (tileHeight <= 0) { /* ... */ }
+        if (tileHeight <= 0) {
+             statusText.textContent = 'エラー: タイルサイズが0以下です。';
+             generateButton.disabled = false;
+             return;
+        }
         const alignedHeight = Math.ceil(mainImage.height / tileHeight) * tileHeight;
         const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
         let startY = 0;
@@ -541,7 +545,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                 }
             };
-            worker.onerror = (error) => { /* ... */ };
+            worker.onerror = (error) => {
+                 console.error("F1 Worker Error:", error.message);
+                 statusText.textContent = `エラー: F1 Worker ${i+1} が失敗しました。 ${error.message}`;
+                 terminateWorkers();
+                 generateButton.disabled = false;
+            };
             
             // F1 Workerに処理を依頼
             worker.postMessage({ 
@@ -557,7 +566,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             startY += chunkHeight;
         }
-        if (activeWorkers === 0 && mainImage.height > 0) { /* ... */ }
+        if (activeWorkers === 0 && mainImage.height > 0) {
+             statusText.textContent = 'エラー: Workerを起動できませんでした (chunk/tile size error)。';
+             generateButton.disabled = false;
+        }
     });
 
     // --- 4. 最終的なモザイクの描画 (F2) ---
@@ -671,7 +683,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.warn("[Button Click] 既に別の処理が実行中です。");
                 return;
             } 
-            if (!cachedResults || !mainImage) { /* ... */ return; }
+            if (!cachedResults || !mainImage) {
+                 statusText.textContent = 'エラー: F1計算結果(cachedResults)が見つかりません。';
+                 return;
+            }
 
             if (downloadWarningArea) downloadWarningArea.style.display = 'none';
             lastGeneratedBlob = null;
@@ -860,5 +875,3 @@ function downloadBlob(blob, fileName) {
         URL.revokeObjectURL(url);
     }, 100); 
 }
-}
-
