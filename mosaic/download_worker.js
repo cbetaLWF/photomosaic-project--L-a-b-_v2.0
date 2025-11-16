@@ -1,31 +1,21 @@
 // download_worker.js
-// Hプラン: tileData を fetch
+// Hプラン: postMessage の競合フリーズ対策
 
-// ★ 修正: tileData をWorker内でキャッシュする
 let tileDataCache = null;
 
-/**
- * tile_data.json を fetch し、キャッシュする
- */
 async function getTileData(logPrefix) {
     if (tileDataCache) {
         return tileDataCache;
     }
-    
-    // ★ 修正: F3用のステータス報告
     self.postMessage({ type: 'status', message: `${logPrefix} tile_data.json を fetch 中...` });
-    
-    const response = await fetch('tile_data.json'); // Worker自身がfetch
+    const response = await fetch('tile_data.json'); 
     if (!response.ok) {
         throw new Error(`Worker Error: tile_data.json の fetch に失敗しました (${response.status})`);
     }
     tileDataCache = await response.json();
-    
-    // fetchしたデータを検証
     if (!tileDataCache || !tileDataCache.tiles || tileDataCache.tiles.length === 0) {
          throw new Error('Worker Error: fetch した tile_data.json が不正か空です。');
     }
-    
     self.postMessage({ type: 'status', message: `${logPrefix} tile_data.json 読込完了。` });
     return tileDataCache;
 }
@@ -59,9 +49,7 @@ function getLstar(r, g, b) {
 function runF1Calculation(
     imageDataArray, tileData, tileSize, width, height, textureWeight
 ) {
-    // ★ 修正: F3用のステータス報告 ★
     self.postMessage({ type: 'status', message: `F3 (F1計算) を開始...` });
-    
     const tiles = tileData.tiles;
     const results = [];
     const ASPECT_RATIO = 1.0; 
@@ -183,9 +171,7 @@ async function renderMosaicWorker(
     width, height,
     lightParams, scale
 ) {
-    // ★ 修正: F3用のステータス報告 ★
     self.postMessage({ type: 'status', message: `F3 高解像度描画（タイル描画）を開始...` });
-
     const t_render_start = performance.now(); 
     const canvasWidth = width * scale;
     const canvasHeight = height * scale;
@@ -258,10 +244,7 @@ async function renderMosaicWorker(
     }
     const t_render_end = performance.now();
     ctx.restore(); 
-
-    // ★ 修正: F3用のステータス報告 ★
     self.postMessage({ type: 'status', message: `F3 高解像度描画（ブレンド処理）を開始...` });
-
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -281,15 +264,14 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     
     try {
-        // ★ 修正: F3用のステータス報告 ★
-        self.postMessage({ type: 'status', message: `F3 Worker 起動。必須データを検証中...` });
+        self.postMessage({ type: 'status', message: `F3 Worker 起動。データ(e.data)受信...` }); // ★ステータス修正
         
         const t_start = performance.now();
         
-        // ★★★ 修正: tileData を e.data から削除 ★★★
+        // ★★★ 修正: imageBuffer を受け取る ★★★
         const { 
             /* tileData, */
-            imageDataArray, tileSize, textureWeight,
+            imageBuffer, tileSize, textureWeight,
             sheetBitmaps,
             mainImageBitmap, 
             edgeImageBitmap, 
@@ -297,9 +279,14 @@ self.onmessage = async (e) => {
             lightParams, scale, quality
         } = e.data;
 
+        // ★★★ 修正: バッファから配列を再構築 ★★★
+        const imageDataArray = new Uint8ClampedArray(imageBuffer);
+
+        self.postMessage({ type: 'status', message: `F3 Worker 必須データを検証中...` }); // ★ステータス修正
+
         // ★★★ 修正: 必須データの「事前検証」 (Sanity Check) ★★★
-        if (!imageDataArray) {
-            throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
+        if (!imageDataArray || imageDataArray.length === 0) { // ★修正
+            throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が空か、構築に失敗しました。");
         }
         if (!sheetBitmaps || sheetBitmaps.size === 0) {
             throw new Error("Worker Error: 'sheetBitmaps' (F3スプライトシートMap) が main.js から渡されませんでした。");
@@ -341,7 +328,6 @@ self.onmessage = async (e) => {
         );
         
         // 3. JPEGエンコード処理を実行 (F3-B)
-        // ★ 修正: F3用のステータス報告 ★
         self.postMessage({ type: 'status', message: `F3 JPEGエンコードを開始...` });
         
         const t_encode_start = performance.now();
@@ -364,8 +350,8 @@ self.onmessage = async (e) => {
             buffer: buffer, 
             mimeType: mimeType,
             totalTime: totalTime / 1000.0,
-            jsonFetchTime: jsonFetchTime / 1000.0, // ★ 修正
-            f1CalcTime: f1CalcTime / 1000.0,   // ★ 修正
+            jsonFetchTime: jsonFetchTime / 1000.0, 
+            f1CalcTime: f1CalcTime / 1000.0,
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0,
             sheetCount: sheetBitmaps.size, 
