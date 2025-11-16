@@ -1,22 +1,16 @@
-// main.js (Hプラン: IndexedDB依存を完全排除)
+// main.js (Hプラン: 無限ループ対策)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
     const width = imageData.width;
     const height = imageData.height;
     const data = imageData.data;
-    
-    // 1. グレースケールに変換
     const grayscaleData = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
-        // 知覚輝度 (Luma)
         const gray = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
         grayscaleData[i / 4] = gray;
     }
-
-    // 最終描画用の線画データ (透明で初期化)
     const finalSobelData = new Uint8ClampedArray(data.length);
-    
     const Gx = [
         [-1, 0, 1],
         [-2, 0, 2],
@@ -27,54 +21,40 @@ function applySobelFilter(imageData) {
         [0, 0, 0],
         [1, 2, 1]
     ];
-    
-    // 3段階の閾値
     const thresholds = {
-        low: 15, // 弱いディテール（質感）
-        med: 30, // 最終描画用の線画
-        high: 80 // 強い輪郭（アニメ線など）
+        low: 15, 
+        med: 30, 
+        high: 80
     };
-    
-    // 3段階のディテール量を格納するベクトル
     const detailVector = { low: 0, med: 0, high: 0 };
-
-    // 2. Sobelフィルタ適用 (1回のループで全て計算)
     for (let y = 1; y < height - 1; y++) {
         for (let x = 1; x < width - 1; x++) {
             let sumX = 0;
             let sumY = 0;
-
             for (let ky = -1; ky <= 1; ky++) {
                 for (let kx = -1; kx <= 1; kx++) {
                     const idx = ((y + ky) * width + (x + kx));
-                    if (idx < 0 || idx >= grayscaleData.length) continue; // 境界チェック
+                    if (idx < 0 || idx >= grayscaleData.length) continue; 
                     const gray = grayscaleData[idx];
                     sumX += gray * Gx[ky + 1][kx + 1];
                     sumY += gray * Gy[ky + 1][kx + 1];
                 }
             }
-
             const magnitude = Math.sqrt(sumX * sumX + sumY * sumY);
             const i = (y * width + x) * 4;
-
-            // 1. 最終描画用の線画データ (med threshold)
             if (magnitude > thresholds.med) {
                 const alpha = Math.min(255, magnitude * 1.5);
-                finalSobelData[i] = 0;    // R (黒)
-                finalSobelData[i + 1] = 0; // G (黒)
-                finalSobelData[i + 2] = 0; // B (黒)
-                finalSobelData[i + 3] = alpha; // A (不透明度)
-                
-                detailVector.med += alpha; // 中ディテール量
+                finalSobelData[i] = 0;
+                finalSobelData[i + 1] = 0;
+                finalSobelData[i + 2] = 0;
+                finalSobelData[i + 3] = alpha; 
+                detailVector.med += alpha;
             }
-            
-            // 2. 賢い評価用の特徴ベクトル
             if (magnitude > thresholds.high) {
                 detailVector.high += magnitude;
             }
         }
     }
-    
     return { 
         finalEdgeImageData: new ImageData(finalSobelData, width, height), 
         detailVector: detailVector
@@ -84,7 +64,6 @@ function analyzeImageAndGetRecommendations(image, analysisImageData) {
     const width = image.width;
     const height = image.height;
     const data = analysisImageData.data; 
-    
     let sumLuma = 0;
     for (let i = 0; i < data.length; i += 4) {
         const luma = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
@@ -92,13 +71,10 @@ function analyzeImageAndGetRecommendations(image, analysisImageData) {
     }
     const pixelCount = data.length / 4;
     const meanLuma = sumLuma / pixelCount; 
-    
     const edgeResult = applySobelFilter(analysisImageData); 
     const detailVector = edgeResult.detailVector; 
-    
     const detailLow = (detailVector.low / pixelCount) || 0;    
     const detailHigh = (detailVector.high / pixelCount) || 0; 
-    
     const recommendations = {};
     if (width > 3000) recommendations.tileSize = 15;
     else if (width > 1500) recommendations.tileSize = 25;
@@ -107,12 +83,11 @@ function analyzeImageAndGetRecommendations(image, analysisImageData) {
     recommendations.textureWeight = Math.round(Math.min(200, detailLow * 3.0 + 30)); 
     recommendations.blendRange = Math.round(Math.max(10, meanLuma / 7.0)); 
     recommendations.edgeOpacity = Math.round(Math.max(10, 60 - detailHigh * 10.0));
-    
     return recommendations;
 }
 function highlightParameter(element) {
     if (!element) return;
-    element.style.borderColor = '#dc2626'; // Red-600
+    element.style.borderColor = '#dc2626';
     element.style.borderWidth = '2px';
     element.style.boxShadow = '0 0 5px rgba(220, 38, 38, 0.5)';
 }
@@ -125,7 +100,6 @@ function resetParameterStyles(elements) {
         }
     });
 }
-// ★ Hプラン: idbKeyvalのロードは index.html から削除済み
 
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -160,24 +134,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     const warningNoButton = document.getElementById('warning-no-button');
     const resolutionScaleInput = document.getElementById('resolution-scale');
     const jpegQualityInput = document.getElementById('jpeg-quality');
-    
     const timingLog = document.getElementById('timing-log');
 
     
-    // ( ... 必須要素チェック (null許容) ... )
+    // ( ... 必須要素チェック ... )
     if (!mainCanvas || !statusText || !generateButton || !mainImageInput || !previewModeCheckbox || !tileSizeInput) {
         console.error("Initialization Error: One or more critical HTML elements are missing.");
         document.body.innerHTML = "<h1>Initialization Error</h1><p>The application failed to load because critical elements (Canvas, Buttons, Status, mainImageInput, previewModeCheckbox, tileSizeInput) are missing from the HTML.</p>";
         return;
     }
     
-    // ★★★ 修正点: 全工程の時間計測のための基準点 ★★★
     const t_app_start = performance.now();
     let t_f3_preload_start = 0;
     let t_f1_click = 0;
     let t_f3_click = 0;
     
-    // ( ... 環境ログ (nullチェック済み) ... )
     if (timingLog) {
         timingLog.textContent = ''; 
         const cpuCores = navigator.hardwareConcurrency || 'N/A';
@@ -188,25 +159,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ctx = mainCanvas.getContext('2d');
     let tileData = null; 
     let mainImage = null; 
-    let workers = []; // F1/F2ハイブリッドWorker (1つだけ)
+    let workers = [];
     let edgeCanvas = null; 
     let currentRecommendations = null;
-    
-    // ★★★ Hプラン修正: F1キャッシュ関連の変数を削除 ★★★
     
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     let thumbSheetImage = null; 
-    
-    // F1/F2 の実行中フラグ
     let isGeneratingF1F2 = false; 
-    
     let preloadPromise = null; 
-    
-    // Cプラン (ハイブリッド・メモリキャッシュ)
     let f3SheetCache = new Map(); 
 
-    // ( ... UIの初期設定 (スライダーリスナー) ... )
     generateButton.disabled = true;
     if(downloadButton) downloadButton.style.display = 'none';
     if (brightnessCompensationInput && brightnessCompensationValue) { /* ... */ }
@@ -233,20 +196,15 @@ document.addEventListener('DOMContentLoaded', async () => {
              throw new Error('tile_data.jsonがスプライトシート形式ではありません。Analyzer Appで新しいデータを再生成してください。');
         }
         
-        // F2スプライトシートのロード
         const t_f2_load_start = performance.now();
         statusText.textContent = `ステータス: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) をロード中...`;
         thumbSheetImage = new Image();
         
-        // F2ロード完了時に、F3プリロードを開始する
         thumbSheetImage.onload = () => {
             const t_f2_load_end = performance.now();
             if(timingLog) timingLog.textContent += `\n[INIT] F2スプライトシート ロード: ${((t_f2_load_end - t_f2_load_start)/1000.0).toFixed(3)} 秒`;
-
             statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
             if (mainImageInput) mainImageInput.disabled = false;
-            
-            // ★ Hプラン: F3プリロードはF2完了後に移動 (startF3Preload呼び出しはF2描画完了後に移動)
         };
         thumbSheetImage.onerror = () => {
             statusText.textContent = `エラー: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) のロードに失敗しました。`;
@@ -279,8 +237,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 mainImage.onload = () => {
                     const t_img_load_start = performance.now();
                     
-                    // ★★★ Hプラン修正: F1キャッシュリセットロジックを削除 ★★★
-                    
                     generateButton.disabled = false;
                     if(downloadButton) downloadButton.style.display = 'none';
                     mainCanvas.width = mainImage.width;
@@ -298,14 +254,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                             const w = mainImage.width * ratio;
                             const h = mainImage.height * ratio;
                             const analysisCanvas = new OffscreenCanvas(w, h);
-                            const analysisCtx = analysisCanvas.getContext('2d');
+                            // ★★★ 修正: willReadFrequently を追加 ★★★
+                            const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
                             analysisCtx.drawImage(mainImage, 0, 0, w, h);
                             const analysisImageData = analysisCtx.getImageData(0, 0, w, h);
                             const recommendations = analyzeImageAndGetRecommendations(mainImage, analysisImageData);
                             currentRecommendations = recommendations; 
                             statusText.textContent = `ステータス: フルサイズの線画を事前計算中...`;
                             
-                            const fullImageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height);
+                            // ★★★ 修正: willReadFrequently を追加 ★★★
+                            const fullCtx = mainCanvas.getContext('2d', { willReadFrequently: true });
+                            fullCtx.drawImage(mainImage, 0, 0); // 再描画
+                            const fullImageData = fullCtx.getImageData(0, 0, mainImage.width, mainImage.height);
                             const fullEdgeResult = applySobelFilter(fullImageData);
                             
                             edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
@@ -357,9 +317,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (edgeOpacityValue) edgeOpacityValue.textContent = currentRecommendations.edgeOpacity;
             }
             statusText.textContent = 'ステータス: 推奨パラメータを適用しました。';
-            
-            // ★★★ Hプラン修正: F1キャッシュリセットロジックを削除 ★★★
-            
             generateButton.disabled = false;
         });
     }
@@ -387,42 +344,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         return Promise.all(running);
     }
     
-    // Cプラン (ハイブリッド・メモリキャッシュ)
+    // ( ... startF3Preload (変更なし) ... )
     function startF3Preload(tileData) {
-        
-        // Hプラン: プリロードが既に開始されていたら実行しない
         if (preloadPromise) return;
-        
         const fullSet = tileData.tileSets.full;
         const urlsToPreload = fullSet.sheetUrls;
-
         console.log(`[F3 Preload] F2描画完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
-        
-        t_f3_preload_start = performance.now(); // ★ 計測: T1 (F3 Preload Start)
-        f3SheetCache.clear(); // 古いキャッシュをクリア
-        
+        t_f3_preload_start = performance.now();
+        f3SheetCache.clear();
         const MAX_PRELOAD_CONCURRENCY = 10;
-        
-        const preloadTasks = urlsToPreload.map((url, index) => { // ★ index を取得
+        const preloadTasks = urlsToPreload.map((url, index) => {
             return () => fetch(url, { mode: 'cors' }) 
                          .then(response => {
                              if (!response.ok) {
                                  throw new Error(`HTTP error ${response.status} for ${url}`);
                              }
-                             return response.arrayBuffer(); // ★ 本体(Body)をダウンロード
+                             return response.arrayBuffer();
                          })
                          .then(buffer => {
-                             // ArrayBufferをグローバルMapに保存
                              f3SheetCache.set(index, buffer);
-                             return buffer.byteLength; // ログ用にサイズを返す
+                             return buffer.byteLength;
                          })
                          .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err.message));
         });
-        
         preloadPromise = runBatchedLoads(preloadTasks, MAX_PRELOAD_CONCURRENCY);
-        
         if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のバックグラウンドロード開始...`;
-        
         preloadPromise.then((sizes) => {
             const t_f3_preload_end = performance.now();
             const totalSizeMB = sizes.reduce((acc, s) => acc + (s || 0), 0) / 1024 / 1024;
@@ -445,21 +391,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         terminateWorkers(); 
-        isGeneratingF1F2 = true; // F1/F2実行フラグ
+        isGeneratingF1F2 = true; 
         
         generateButton.disabled = true;
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
         
-        t_f1_click = performance.now(); // ★ 計測: T2 (F1 Click)
+        t_f1_click = performance.now();
         
-        // ( ... ログリセット (変更なし) ... )
         if (timingLog) {
             const envLog = timingLog.innerHTML.split('\n')[0]; 
             timingLog.innerHTML = envLog; 
         }
 
-        // ( ... パラメータ取得 (変更なし) ... )
         const currentHeavyParams = {
             src: mainImage.src,
             tileSize: parseInt(tileSizeInput.value), 
@@ -471,8 +415,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             brightnessCompensation: parseInt(brightnessCompensationInput.value)
         };
         
-        // ★★★ Hプラン修正: F1キャッシュチェックロジックを削除 ★★★
-
         // ( ... パラメータログ (変更なし) ... )
         if (timingLog) {
             timingLog.textContent += `\n--- [F1/F2 PARAMS] ---`;
@@ -485,29 +427,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             timingLog.textContent += `\n-----------------------`;
         }
         
-        // ★★★ Hプラン修正: F1キャッシュチェック (高速再描画) ロジックを削除 ★★★
+        // ★★★ 修正: F1キャッシュチェック (高速再描画) ロジックを削除 ★★★
         
         // --- 常に通常処理 (F1+F2 Worker処理を実行) ---
         
-        // ★ Hプラン修正: キャッシュリセットは不要
-        
         statusText.textContent = 'ステータス: F1(計算) + F2(描画) をWorkerで実行中...';
         
-        // F1/F2 WorkerにF1+F2を依頼
         await renderMosaicWithWorker(
             mainCanvas,
             currentLightParams,
-            false // isRerender = false (Hプランではこのフラグ自体が無視される)
+            currentHeavyParams, // ★ 修正: heavyParams を渡す
+            false 
         );
         
-        isGeneratingF1F2 = false; // F1/F2完了
+        isGeneratingF1F2 = false; 
     });
 
     // --- 4. F1/F2ハイブリッドWorkerの呼び出し ---
     async function renderMosaicWithWorker(
         targetCanvas, 
         lightParams,
-        isRerender // (Hプランでは常にfalseで呼ばれる)
+        heavyParams, // ★ 修正: heavyParams を受け取る
+        isRerender
     ) {
         
         const t_f1f2_start = performance.now(); 
@@ -519,24 +460,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
             const thumbSheetBitmap = await createImageBitmap(thumbSheetImage);
             
-            // F1計算用の元画像ImageDataも必要
             let imageData = null;
             let transferList = [mainImageBitmap, thumbSheetBitmap];
             if (edgeImageBitmap) transferList.push(edgeImageBitmap);
 
-            // ★ Hプランでは isRerender は常に false のため、常にImageDataを取得
-            ctx.clearRect(0, 0, mainImage.width, mainImage.height);
-            ctx.drawImage(mainImage, 0, 0); 
-            imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
+            // ★ 修正: willReadFrequently を true に設定
+            const mainCtx = mainCanvas.getContext('2d', { willReadFrequently: true });
+            mainCtx.clearRect(0, 0, mainImage.width, mainImage.height);
+            mainCtx.drawImage(mainImage, 0, 0); 
+            imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
             transferList.push(imageData.data.buffer);
             
             const t_f1f2_bitmap_end = performance.now();
             
             statusText.textContent = `ステータス: F1/F2 Worker実行中...`;
             
-            // F1/F2ハイブリッドWorkerを起動
+            // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
+            const tileSize = heavyParams.tileSize;
+            if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
+                throw new Error(`不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
+            }
+            
             const hybridWorker = new Worker('./mosaic_worker.js');
-            workers.push(hybridWorker); // 実行中リストに追加
+            workers.push(hybridWorker); 
             
             // 2. F1/F2 Worker実行
             const t_f1f2_worker_start = performance.now();
@@ -545,33 +491,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (e.data.type === 'complete') {
                         const finalBitmap = e.data.bitmap;
                         const ctx = targetCanvas.getContext('2d');
-                        
                         ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
                         ctx.drawImage(finalBitmap, 0, 0);
                         finalBitmap.close(); 
                         
-                        // ★ 計測: F1/F2完了ログ
+                        // ( ... ログ出力 (変更なし) ... )
                         const t_f1f2_worker_end = performance.now();
                         if(timingLog) {
-                            // ★ Hプラン: f1Skipped は常に false
-                            if (e.data.f1Skipped) { // (この分岐はHプランでは通らないはず)
+                            if (e.data.f1Skipped) {
                                 timingLog.textContent += `\n[F1] Worker 配置計算: (キャッシュ使用)`;
                             } else {
                                 timingLog.textContent += `\n[F1] Worker 配置計算: ${e.data.f1Time.toFixed(3)} 秒`;
                                 timingLog.textContent += `\n[LOAD] Draw Tiles: ${e.data.drawTiles} 個`;
                                 timingLog.textContent += `\n[LOAD] JSON Size (approx): ${e.data.jsonSizeKB.toFixed(0)} KB`;
                             }
-                            
                             timingLog.textContent += `\n[F2] Worker 描画 (合計): ${e.data.f2Time.toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F2-A (Tile Draw): ${e.data.f2TileTime.toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F2-B (Blend): ${e.data.f2BlendTime.toFixed(3)} 秒`;
-                            
                             timingLog.textContent += `\n[F1/F2] メインスレッド待機 (総時間): ${((t_f1f2_worker_end - t_f1f2_start)/1000.0).toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F1/F2 (Bitmap/Data準備): ${((t_f1f2_bitmap_end - t_f1f2_bitmap_start)/1000.0).toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F1/F2 (Worker実行): ${((t_f1f2_worker_end - t_f1f2_worker_start)/1000.0).toFixed(3)} 秒`;
                         }
-                        
-                        // ★★★ Hプラン修正: F1完了フラグの設定を削除 ★★★
                         
                         resolve();
                         
@@ -580,25 +520,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                     } else if (e.data.type === 'progress') {
                         if (progressBar) progressBar.style.width = `${e.data.progress * 100}%`;
                     } else if (e.data.type === 'error') {
+                        // ★ 修正: エラー報告機能
                         reject(new Error(e.data.message));
                     }
-                    terminateWorkers(); // F1/F2 Workerをクリア
+                    terminateWorkers(); 
                 };
                 hybridWorker.onerror = (error) => {
                     reject(new Error(`F1/F2 Worker error: ${error.message}`));
-                    terminateWorkers(); // F1/F2 Workerをクリア
+                    terminateWorkers(); 
                 };
                 
-                // ★★★ バグ修正: imageData オブジェクトではなく、imageData.data 配列を渡す ★★★
                 hybridWorker.postMessage({
                     // F1用
-                    imageDataArray: imageData.data, // ★ 修正
+                    imageDataArray: imageData.data,
                     tileData: tileData, 
-                    tileSize: parseInt(tileSizeInput.value),
+                    tileSize: heavyParams.tileSize, // ★ 修正
                     width: mainImage.width,
                     height: mainImage.height,
                     brightnessCompensation: lightParams.brightnessCompensation,
-                    textureWeight: parseFloat(textureWeightInput.value) / 100.0,
+                    textureWeight: heavyParams.textureWeight, // ★ 修正
                     startY: 0, 
                     endY: mainImage.height, 
                     
@@ -608,10 +548,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     thumbSheetBitmap: thumbSheetBitmap,
                     lightParams: lightParams,
                     
-                    // Hプラン (常にfalse)
                     isRerender: isRerender
                     
-                }, transferList); // BitmapとImageDataバッファを転送
+                }, transferList); 
             });
             
             await workerPromise; 
@@ -619,14 +558,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.textContent = 'ステータス: モザイクアートが完成しました！';
             
         } catch (err) {
-            statusText.textContent = `エラー: F1/F2 Workerが失敗しました。 ${err.message}`;
+            // ★ 修正: main.js 側での検証エラーもキャッチ
+            statusText.textContent = `エラー: F1/F2 Workerの起動に失敗しました。 ${err.message}`;
             console.error("F1/F2 Hybrid Worker failed:", err);
         } finally {
             isGeneratingF1F2 = false;
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
             
-            // F2描画が完了したこのタイミングで、F3プリロードを開始する
             if (!preloadPromise) {
                 startF3Preload(tileData);
             }
@@ -638,7 +577,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
 
-        // F3ダウンロード (Cプラン + Hプラン)
         downloadButton.addEventListener('click', () => { 
             resetParameterStyles(allDownloadParams);
             
@@ -647,8 +585,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             } 
             
-            // ★★★ Hプラン修正: F1キャッシュのチェックを削除 ★★★
-            if (!mainImage) { // mainImageの存在のみチェック
+            if (!mainImage) {
                  statusText.textContent = 'エラー: メイン画像がありません。';
                  return;
             }
@@ -656,15 +593,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (downloadWarningArea) downloadWarningArea.style.display = 'none';
             lastGeneratedBlob = null;
             
-            // 1. UIを即座にロック
             isGeneratingFullRes = true;
             generateButton.disabled = true;
             downloadButton.disabled = true;
             if (downloadSpinner) downloadSpinner.style.display = 'inline-block';
 
-            t_f3_click = performance.now(); // ★ 計測: T3 (F3 Click)
+            t_f3_click = performance.now();
 
-            // 2. プリロードが開始されたかチェック
             if (!preloadPromise) {
                  statusText.textContent = 'エラー: F3プリロードがまだ開始されていません。F2の描画が完了してから再度お試しください。';
                  isGeneratingFullRes = false;
@@ -677,7 +612,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const t_f3_wait_start = performance.now();
             
-            // ( ... F3パラメータログ (変更なし) ... )
             const f3_scale = parseFloat(resolutionScaleInput.value);
             const f3_quality = parseInt(jpegQualityInput.value) / 100.0;
             if(timingLog) {
@@ -690,9 +624,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 timingLog.textContent += `\n-----------------------`;
             }
             
-            // 3. プリロード完了後にF3 Workerを起動する「予約」を入れる
             preloadPromise.then(async () => {
-                // --- ここからF3 Worker起動処理 (プリロード完了後に実行される) ---
                 const t_f3_wait_end = performance.now();
                 if(timingLog) {
                     timingLog.textContent += `\n[F3] メインスレッド: プリロード待機: ${((t_f3_wait_end - t_f3_wait_start)/1000.0).toFixed(3)} 秒`;
@@ -706,26 +638,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                         brightnessCompensation: parseInt(brightnessCompensationInput.value)
                     };
 
-                    // F3 Bitmap準備 (メインスレッド)
                     const t_f3_bitmap_start = performance.now();
                     const mainImageBitmap = await createImageBitmap(mainImage);
                     const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                     
-                    // ★ Hプラン: F1計算用の元画像ImageDataもF3に渡す
-                    ctx.clearRect(0, 0, mainImage.width, mainImage.height);
-                    ctx.drawImage(mainImage, 0, 0); 
-                    const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
+                    // ★ 修正: willReadFrequently を true に設定
+                    const mainCtx = mainCanvas.getContext('2d', { willReadFrequently: true });
+                    mainCtx.clearRect(0, 0, mainImage.width, mainImage.height);
+                    mainCtx.drawImage(mainImage, 0, 0); 
+                    const imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
                     
-                    // Cプラン (ハイブリッド)
-                    // 必要なArrayBufferをf3SheetCacheから抽出し、ImageBitmapに変換
                     const bitmapsToSend = new Map();
-                    const transferList = [mainImageBitmap, imageData.data.buffer]; // ★ Hプラン: imageDataも転送
+                    const transferList = [mainImageBitmap, imageData.data.buffer];
                     if (edgeImageBitmap) transferList.push(edgeImageBitmap);
                     
                     let totalSendSize = 0;
                     const bitmapCreationPromises = [];
                     
-                    // Hプラン (F1の結果が不明なため、全シートをBitmap変換)
                     for (const [index, buffer] of f3SheetCache.entries()) {
                         if (buffer) {
                             totalSendSize += buffer.byteLength;
@@ -748,49 +677,49 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     statusText.textContent = 'ステータス: Workerに描画とエンコードを委譲中...';
                     
+                    // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
+                    const tileSize = parseInt(tileSizeInput.value);
+                    if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
+                        throw new Error(`不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
+                    }
+                    
                     const downloadWorker = new Worker('./download_worker.js'); 
                     workers.push(downloadWorker);
                     
-                    // F3 Worker実行
                     const t_f3_worker_start = performance.now();
                     const workerPromise = new Promise((resolve, reject) => {
                         downloadWorker.onmessage = (e) => {
                             if (e.data.type === 'complete') {
+                                // ( ... ログ出力 (変更なし) ... )
                                 const t_f3_worker_end = performance.now();
-                                
-                                // ★ 計測: F3完了ログ
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    // ★ Hプラン (F3-A1はF1 Re-Calc)
                                     timingLog.textContent += `\n  - F3-A1 (F1 Re-Calc): ${e.data.loadTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-A2 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
-                                    
                                     timingLog.textContent += `\n[F3] メインスレッド待機 (総時間): ${((t_f3_worker_end - t_f3_wait_end)/1000.0).toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3 (Bitmap/Data準備): ${((t_f3_bitmap_end - t_f3_bitmap_start)/1000.0).toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3 (Worker実行): ${((t_f3_worker_end - t_f3_worker_start)/1000.0).toFixed(3)} 秒`;
                                 }
-                                
                                 const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
                                 resolve(blob);
                             } else if (e.data.type === 'error') {
+                                // ★ 修正: エラー報告機能
                                 reject(new Error(e.data.message));
                             }
-                            terminateWorkers(); // F3 Workerをクリア
+                            terminateWorkers(); 
                         };
                         downloadWorker.onerror = (error) => {
                             reject(new Error(`Worker error: ${error.message}`));
-                            terminateWorkers(); // F3 Workerをクリア
+                            terminateWorkers(); 
                         };
                         
-                        // ★★★ バグ修正: imageData オブジェクトではなく、imageData.data 配列を渡す ★★★
                         downloadWorker.postMessage({
                             tileData: tileData, 
                             sheetBitmaps: bitmapsToSend, 
                             
-                            // ★ Hプラン: F1計算用のデータを渡す
-                            imageDataArray: imageData.data, // ★ 修正
-                            tileSize: parseInt(tileSizeInput.value),
+                            imageDataArray: imageData.data,
+                            tileSize: tileSize, // ★ 修正
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
                             mainImageBitmap: mainImageBitmap, 
@@ -800,12 +729,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                             lightParams: lightParams,
                             scale: f3_scale, 
                             quality: f3_quality
-                        }, transferList); // ImageBitmapとImageDataバッファを転送
+                        }, transferList); 
                     });
                     
                     const blob = await workerPromise;
                     
-                    // ( ... ファイルサイズチェックと警告 (変更なし) ... )
+                    // ( ... ファイルサイズチェック (変更なし) ... )
                     const fileSizeMB = blob.size / 1024 / 1024;
                     const limitMB = 15;
                     if (fileSizeMB <= limitMB || !downloadWarningArea) {
@@ -819,6 +748,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
 
                 } catch (err) {
+                    // ★ 修正: main.js 側での検証エラーもキャッチ
                     statusText.textContent = `エラー: 高画質版の生成またはダウンロードに失敗しました。 ${err.message}`;
                     console.error("Download failed:", err);
                 } finally {
@@ -828,15 +758,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                          downloadButton.disabled = false;
                     }
                 }
-            }); // --- .then() の予約処理ここまで ---
+            }); 
         });
     }
 
     // --- 6. 警告ボタンのリスナー (変更なし) ---
     if (warningYesButton && warningNoButton) {
-        // ( ... 変更なし ... )
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
-        
         warningYesButton.addEventListener('click', () => {
             if (!lastGeneratedBlob) return;
             downloadWarningArea.style.display = 'none';
@@ -846,7 +774,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             generateButton.disabled = false;
             downloadButton.disabled = false;
         });
-
         warningNoButton.addEventListener('click', () => {
             downloadWarningArea.style.display = 'none';
             resetParameterStyles(allDownloadParams); 
