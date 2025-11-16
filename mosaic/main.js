@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: main.js
+fullContent:
 // 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
     const width = imageData.width;
@@ -386,7 +390,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return Promise.all(running);
     }
     
-    let preloadPromise = null;
+    let preloadPromise = null; // ★ F3プリロードの完了を待つためのPromise
     
     function startF3Preload(tileData, cachedResults) {
         // 1. 必須シートリストを作成
@@ -413,6 +417,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                          .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err));
         });
         
+        // ★ 修正: グローバル変数にPromiseを保持
         preloadPromise = runBatchedLoads(preloadTasks, MAX_PRELOAD_CONCURRENCY);
         
         if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のプリロードを開始... (並列数: ${MAX_PRELOAD_CONCURRENCY})`;
@@ -474,6 +479,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // --- Case 2: 通常処理 (F1 Worker処理を実行) ---
         cachedResults = null; 
+        preloadPromise = null; // ★ 修正: F1再計算のため、プリロードPromiseをリセット
         lastHeavyParams = currentHeavyParams; 
         statusText.textContent = 'ステータス: タイル配置を計算中...';
         
@@ -682,6 +688,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 statusText.textContent = 'ステータス: 高画質版を生成中... (時間がかかります)';
 
                 const t_download_start = performance.now(); // ★ タイマー開始 (F3)
+                
+                // ★★★ 修正点: F3プリロードの完了を待機 ★★★
+                statusText.textContent = 'ステータス: F3プリロードの完了を待機中...';
+                if (!preloadPromise) {
+                    // F1実行直後にF3を押した場合など (通常はF2完了時点でF3Preloadは開始されている)
+                    console.warn("F3 Preload promise is missing, starting it now.");
+                    startF3Preload(tileData, cachedResults);
+                    if (!preloadPromise) { // これでもnullならF1が壊れている
+                         throw new Error("F3 Preload could not be started.");
+                    }
+                }
+                
+                const t_wait_start = performance.now();
+                await preloadPromise; // F3プリロードが完了するまでここで待機
+                const t_wait_end = performance.now();
+                
+                if(timingLog) {
+                    timingLog.textContent += `\n[F3] メインスレッド: プリロード待機: ${(t_wait_end - t_wait_start) / 1000.0} 秒`;
+                }
+                statusText.textContent = 'ステータス: プリロード完了。F3 Workerを起動します...';
+                // ★★★ 修正点ここまで ★★★
 
                 const lightParams = {
                     blendOpacity: parseInt(blendRangeInput ? blendRangeInput.value : 30),
@@ -836,4 +863,5 @@ function downloadBlob(blob, fileName) {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }, 100); 
+}
 }
