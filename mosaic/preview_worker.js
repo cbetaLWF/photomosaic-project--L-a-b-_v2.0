@@ -1,15 +1,16 @@
-// preview_worker.js
-// F2処理（プレビュー描画 + ブレンド）を完全に実行するWorker
+// preview_worker.js (F2: IndexedDB読み込み + 描画)
+
+// 1. IndexedDBライブラリのインポート
+importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js');
+
 
 /**
  * Worker内で実行されるrenderMosaicのコピー (F2プレビュー版)
- * F3 (download_worker.js) とほぼ同じロジックだが、
- * F2 (Thumb) のスプライトシートとBitmapを扱う点が異なる。
  */
 async function renderMosaicPreviewWorker(
     canvas, 
     tileData, // JSON全体
-    results, // F1のレシピ
+    results, // ★ IndexedDBから読み込んだF1の結果
     mainImageBitmap, 
     edgeImageBitmap, 
     thumbSheetBitmap, // ★ F2用のサムネイル スプライトシートBitmap
@@ -27,16 +28,6 @@ async function renderMosaicPreviewWorker(
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     
-    // 1. 元画像の描画 (背景リセット)
-    // F2では、元画像を最初に描画し、その上にタイルを重ねる
-    // (F3は高画質化のためタイルが先だったが、F2は元画像が先の方がSoft-Lightが乗りやすい)
-    // → やはりF3と同じロジック（タイルを先に描画）に統一する
-    /*
-    if (mainImageBitmap) {
-        ctx.drawImage(mainImageBitmap, 0, 0, canvasWidth, canvasHeight);
-    }
-    */
-
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
@@ -151,7 +142,7 @@ self.onmessage = async (e) => {
     
     const { 
         tileData,
-        cachedResults, // F1の結果
+        // ★ 修正: cachedResults (JSON) は受け取らない
         mainImageBitmap, 
         edgeImageBitmap, 
         thumbSheetBitmap, // ★ F2用Bitmap
@@ -161,12 +152,21 @@ self.onmessage = async (e) => {
     
     try {
         // 1. Worker内でOffscreenCanvasを作成
-        // プレビューはスケール1.0固定
         const previewCanvas = new OffscreenCanvas(width, height);
+        
+        // ★★★ 修正: Gプラン (F2-A1) ★★★
+        // IndexedDBから F1の結果 (cachedResults) を読み込む
+        const t_f2_db_start = performance.now();
+        const results = await idbKeyval.get('cachedResults');
+        if (!results || results.length === 0) {
+            throw new Error("IndexedDB 'cachedResults' is empty or missing.");
+        }
+        const t_f2_db_end = performance.now();
+        // ★★★ 修正ここまで ★★★
 
-        // 2. 描画処理を実行 (F2-A, F2-B)
+        // 2. 描画処理を実行 (F2-A2)
         const { tileTime, blendTime } = await renderMosaicPreviewWorker(
-            previewCanvas, tileData, cachedResults, mainImageBitmap, edgeImageBitmap, 
+            previewCanvas, tileData, results, mainImageBitmap, edgeImageBitmap, 
             thumbSheetBitmap,
             width, height, lightParams
         );
@@ -182,8 +182,9 @@ self.onmessage = async (e) => {
             type: 'complete', 
             bitmap: finalBitmap,
             totalTime: totalTime / 1000.0,
-            tileTime: tileTime / 1000.0,
-            blendTime: blendTime / 1000.0
+            dbReadTime: (t_f2_db_end - t_f2_db_start) / 1000.0, // ★ F2-A1 (DB Read)
+            tileTime: tileTime / 1000.0, // ★ F2-A2 (Draw)
+            blendTime: blendTime / 1000.0 // ★ F2-B (Blend)
         }, [finalBitmap]); // ImageBitmapを転送リストに追加
         
     } catch (error) {
