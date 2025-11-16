@@ -1,4 +1,4 @@
-// mosaic_worker.js (Hプラン: 無限ループ対策)
+// mosaic_worker.js (Hプラン: 詳細ステータス報告 + 無限ループ対策)
 
 // ( ... L*a*b*ヘルパー関数群 (変更なし) ... )
 // ( ... renderMosaicPreview (F2描画) 関数 (変更なし) ... )
@@ -34,6 +34,9 @@ async function renderMosaicPreview(
     width, height,
     lightParams
 ) {
+    // ★ 修正: 詳細ステータス報告 (F2-A) ★
+    self.postMessage({ type: 'status', message: `F2描画（タイル描画）を開始...` });
+    
     const t_render_start = performance.now(); 
     const canvasWidth = width;
     const canvasHeight = height;
@@ -97,6 +100,10 @@ async function renderMosaicPreview(
     }
     const t_render_tile_end = performance.now();
     ctx.restore(); 
+
+    // ★ 修正: 詳細ステータス報告 (F2-B) ★
+    self.postMessage({ type: 'status', message: `F2描画（ブレンド処理）を開始...` });
+
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -120,8 +127,10 @@ async function renderMosaicPreview(
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
     
-    // ★★★ 修正: 処理全体を try...catch で囲む ★★★
     try {
+        // ★ 修正: 詳細ステータス報告 ★
+        self.postMessage({ type: 'status', message: `起動。必須データを検証中...` });
+        
         const t_f1_start = performance.now();
         
         const { 
@@ -132,7 +141,7 @@ self.onmessage = async (e) => {
             isRerender
         } = e.data;
         
-        // ★★★ 修正: 必須データの「事前検証」 (Sanity Check) ★★★
+        // ( ... 事前検証 (Sanity Check) ... )
         if (!imageDataArray) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
         }
@@ -148,18 +157,18 @@ self.onmessage = async (e) => {
         if (!lightParams) {
             throw new Error("Worker Error: 'lightParams' (描画パラメータ) が main.js から渡されませんでした。");
         }
-        
-        // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
         if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
+
+        // ★ 修正: 詳細ステータス報告 ★
+        self.postMessage({ type: 'status', message: `検証完了。F1計算ループを開始...` });
 
         const tiles = tileData.tiles;
         
         let results = []; 
         let f1Time = 0;
         
-        // F1計算を通常実行
         const ASPECT_RATIO = 1.0; 
         const tileWidth = tileSize;
         const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
@@ -174,23 +183,20 @@ self.onmessage = async (e) => {
         for (let y = startY; y < endY; y += tileHeight) {
             for (let x = 0; x < width; x += tileWidth) {
                 
+                // ( ... F1計算ロジック (変更なし) ... )
                 const neighborLeft = lastChoiceInRow.get(y); 
                 const currentBlockWidth = Math.min(tileWidth, width - x);
                 const currentBlockHeight = Math.min(tileHeight, height - y);
-                
                 const thumbW = tileData.tileSets.thumb.tileWidth;
                 const thumbH = tileData.tileSets.thumb.tileHeight;
                 const sSize = Math.min(thumbW, thumbH);
-                
                 const oneThirdX = x + Math.floor(currentBlockWidth / 3); 
                 const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
                 const oneThirdY = y + Math.floor(currentBlockHeight / 3);
                 const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
-                
                 const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
                 let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
                 let pixelCountTotal = 0;
-                
                 for (let py = y; py < y + currentBlockHeight; py++) {
                     const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                     for (let px = x; px < x + currentBlockWidth; px++) {
@@ -205,7 +211,6 @@ self.onmessage = async (e) => {
                     }
                 }
                 if (pixelCountTotal === 0) continue;
-                
                 const r_avg_total = r_sum_total / pixelCountTotal;
                 const g_avg_total = g_sum_total / pixelCountTotal;
                 const b_avg_total = b_sum_total / pixelCountTotal;
@@ -214,8 +219,6 @@ self.onmessage = async (e) => {
                     if (s.count === 0) return 0;
                     return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
                 });
-                
-                // ( ... 最適なタイルを検索するループ (変更なし) ... )
                 let bestMatchPattern = null;
                 let bestMatchTileId = -1; 
                 let minDistance = Infinity;
@@ -283,6 +286,8 @@ self.onmessage = async (e) => {
                     lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
                 }
             } // xループの終わり
+
+            // ★ 修正: F1の進捗は'progress'で報告
             processedRows++;
             self.postMessage({ type: 'progress', progress: processedRows / totalRowsInChunk });
         } // yループの終わり
@@ -290,11 +295,13 @@ self.onmessage = async (e) => {
         const t_f1_end = performance.now();
         f1Time = (t_f1_end - t_f1_start) / 1000.0;
         
-        self.postMessage({ type: 'status', message: `F2プレビュー描画中...` });
+        // ★ 修正: 詳細ステータス報告 ★
+        self.postMessage({ type: 'status', message: `F1計算完了。F2描画準備中...` });
         
         const t_f2_start = performance.now();
         const previewCanvas = new OffscreenCanvas(width, height);
 
+        // F2描画処理 (内部で 'F2描画（タイル描画）' と 'F2描画（ブレンド処理）' を報告)
         const { tileTime, blendTime } = await renderMosaicPreview(
             previewCanvas, tileData, results,
             mainImageBitmap, edgeImageBitmap, 
@@ -307,6 +314,10 @@ self.onmessage = async (e) => {
         
         const f2Time = (t_f2_end - t_f2_start) / 1000.0;
 
+        // ★ 修正: 詳細ステータス報告 ★
+        self.postMessage({ type: 'status', message: `F2描画完了。メインスレッドへ転送中...` });
+
+        // メインスレッドに結果を返送
         self.postMessage({ 
             type: 'complete', 
             bitmap: finalBitmap,
@@ -319,13 +330,12 @@ self.onmessage = async (e) => {
             jsonSizeKB: (JSON.stringify(results).length / 1024)
         }, [finalBitmap]);
 
-    // ★★★ 修正: catch ブロックを追加 ★★★
     } catch (error) {
+        // ( ... catchブロック (変更なし) ... )
         let detailedMessage = `F1/F2 Worker CRASH: ${error.message}\n`;
         if (error.stack) {
             detailedMessage += `Stack: ${error.stack}`;
         }
-        
         if (error.message.includes("Cannot read properties of null") || error.message.includes("undefined")) {
             detailedMessage += "\nHint: 'imageDataArray' または 'tileData' が null または undefined のまま使用されようとしました。";
         }
@@ -335,7 +345,6 @@ self.onmessage = async (e) => {
         if (error.name === 'ReferenceError') {
             detailedMessage += "\nHint: 'idbKeyval' のような未定義の変数や関数が呼び出されました。";
         }
-
         self.postMessage({ 
             type: 'error', 
             message: detailedMessage 
