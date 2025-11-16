@@ -193,8 +193,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentRecommendations = null;
     
     // ★★★ Hプラン修正: F1キャッシュ関連の変数を削除 ★★★
-    // let cachedResults = null; // 削除
-    // let lastHeavyParams = {}; // 削除
     
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
@@ -282,8 +280,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const t_img_load_start = performance.now();
                     
                     // ★★★ Hプラン修正: F1キャッシュリセットロジックを削除 ★★★
-                    // cachedResults = null; // 削除
-                    // lastHeavyParams = {}; // 削除
                     
                     generateButton.disabled = false;
                     if(downloadButton) downloadButton.style.display = 'none';
@@ -363,8 +359,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.textContent = 'ステータス: 推奨パラメータを適用しました。';
             
             // ★★★ Hプラン修正: F1キャッシュリセットロジックを削除 ★★★
-            // cachedResults = null; // 削除
-            // lastHeavyParams = {}; // 削除
             
             generateButton.disabled = false;
         });
@@ -478,7 +472,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
         
         // ★★★ Hプラン修正: F1キャッシュチェックロジックを削除 ★★★
-        // const isTileSizeChanged = ... // 削除
 
         // ( ... パラメータログ (変更なし) ... )
         if (timingLog) {
@@ -493,13 +486,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         // ★★★ Hプラン修正: F1キャッシュチェック (高速再描画) ロジックを削除 ★★★
-        // if (!isTileSizeChanged && cachedResults ...) { ... } ブロックを削除
         
         // --- 常に通常処理 (F1+F2 Worker処理を実行) ---
         
         // ★ Hプラン修正: キャッシュリセットは不要
-        // cachedResults = null; // 削除
-        // lastHeavyParams = currentHeavyParams; // 削除
         
         statusText.textContent = 'ステータス: F1(計算) + F2(描画) をWorkerで実行中...';
         
@@ -535,7 +525,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (edgeImageBitmap) transferList.push(edgeImageBitmap);
 
             // ★ Hプランでは isRerender は常に false のため、常にImageDataを取得
-            // if (!isRerender) { ... } の分岐を解除
             ctx.clearRect(0, 0, mainImage.width, mainImage.height);
             ctx.drawImage(mainImage, 0, 0); 
             imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
@@ -583,7 +572,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                         
                         // ★★★ Hプラン修正: F1完了フラグの設定を削除 ★★★
-                        // cachedResults = true; // 削除
                         
                         resolve();
                         
@@ -601,10 +589,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     terminateWorkers(); // F1/F2 Workerをクリア
                 };
                 
-                // F1/F2ハイブリッドWorkerに全データを転送
+                // ★★★ バグ修正: imageData オブジェクトではなく、imageData.data 配列を渡す ★★★
                 hybridWorker.postMessage({
                     // F1用
-                    imageData: imageData, 
+                    imageDataArray: imageData.data, // ★ 修正
                     tileData: tileData, 
                     tileSize: parseInt(tileSizeInput.value),
                     width: mainImage.width,
@@ -660,7 +648,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             } 
             
             // ★★★ Hプラン修正: F1キャッシュのチェックを削除 ★★★
-            // F1が完了したかどうかのチェックは、F2が完了(downloadButtonが表示)した時点で担保される
             if (!mainImage) { // mainImageの存在のみチェック
                  statusText.textContent = 'エラー: メイン画像がありません。';
                  return;
@@ -796,13 +783,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                             terminateWorkers(); // F3 Workerをクリア
                         };
                         
-                        // ★ Hプラン
+                        // ★★★ バグ修正: imageData オブジェクトではなく、imageData.data 配列を渡す ★★★
                         downloadWorker.postMessage({
                             tileData: tileData, 
                             sheetBitmaps: bitmapsToSend, 
                             
                             // ★ Hプラン: F1計算用のデータを渡す
-                            imageData: imageData,
+                            imageDataArray: imageData.data, // ★ 修正
                             tileSize: parseInt(tileSizeInput.value),
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
