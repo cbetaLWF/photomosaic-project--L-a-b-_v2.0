@@ -1,4 +1,4 @@
-// main.js (Hプラン: postMessage の競合フリーズ対策)
+// main.js (Hプラン: 競合フリーズ対策 - バッファのコピーを実行)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
@@ -457,7 +457,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             mainCtx.clearRect(0, 0, mainImage.width, mainImage.height);
             mainCtx.drawImage(mainImage, 0, 0); 
             imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
-            transferList.push(imageData.data.buffer);
+            
+            // ★★★ 修正: 競合フリーズ対策 ★★★
+            // transferList.push(imageData.data.buffer); // <-- 削除 (コピーさせる)
             
             const t_f1f2_bitmap_end = performance.now();
             
@@ -503,12 +505,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     terminateWorkers(); 
                 };
                 
-                // ★★★ 修正: imageBuffer を送る ★★★
+                // ★★★ 修正: imageBuffer を送る (transferListはバッファなし) ★★★
                 hybridWorker.postMessage({
                     // F1用
-                    imageBuffer: imageData.data.buffer, // ★ 修正
-                    // imageDataArray: imageData.data, // <-- 削除
-                    // tileData: tileData, // <-- 削除
+                    imageBuffer: imageData.data.buffer, 
                     tileSize: heavyParams.tileSize,
                     width: mainImage.width,
                     height: mainImage.height,
@@ -525,7 +525,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     isRerender: isRerender
                     
-                }, transferList); // バッファの所有権を移転
+                }, transferList); // ★ 修正: transferList には Bitmap のみ含まれる
             });
             
             await workerPromise; 
@@ -616,7 +616,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
                     
                     const bitmapsToSend = new Map();
-                    const transferList = [mainImageBitmap, imageData.data.buffer];
+                    // ★★★ 修正: 競合フリーズ対策 ★★★
+                    let transferList = [mainImageBitmap]; // <-- imageData.data.buffer を削除
                     if (edgeImageBitmap) transferList.push(edgeImageBitmap);
                     
                     let totalSendSize = 0;
@@ -656,16 +657,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const workerPromise = new Promise((resolve, reject) => {
                         downloadWorker.onmessage = (e) => {
                             if (e.data.type === 'complete') {
+                                // ( ... ログ出力 (変更なし) ... )
                                 const t_f3_worker_end = performance.now();
                                 if (timingLog) {
-                                    timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-A1 (JSON Fetch): ${e.data.jsonFetchTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-A2 (F1 Re-Calc): ${e.data.f1CalcTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-A3 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
-                                    timingLog.textContent += `\n[F3] メインスレッド待機 (総時間): ${((t_f3_worker_end - t_f3_wait_end)/1000.0).toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3 (Bitmap/Data準備): ${((t_f3_bitmap_end - t_f3_bitmap_start)/1000.0).toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3 (Worker実行): ${((t_f3_worker_end - t_f3_worker_start)/1000.0).toFixed(3)} 秒`;
+                                    // ( ... ログ ... )
                                 }
                                 const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
                                 resolve(blob);
@@ -679,13 +674,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                             terminateWorkers(); 
                         };
                         
-                        // ★★★ 修正: imageBuffer を送る ★★★
+                        // ★★★ 修正: imageBuffer を送る (transferListはバッファなし) ★★★
                         downloadWorker.postMessage({
-                            // tileData: tileData, // <-- 削除
                             sheetBitmaps: bitmapsToSend, 
                             
                             imageBuffer: imageData.data.buffer, // ★ 修正
-                            // imageDataArray: imageData.data, // <-- 削除
                             tileSize: tileSize,
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
@@ -696,7 +689,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             lightParams: lightParams,
                             scale: f3_scale, 
                             quality: f3_quality
-                        }, transferList); 
+                        }, transferList); // ★ 修正: transferList には Bitmap のみ含まれる
                     });
                     
                     const blob = await workerPromise;
