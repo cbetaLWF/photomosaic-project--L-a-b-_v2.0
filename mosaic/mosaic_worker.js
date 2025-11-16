@@ -160,8 +160,9 @@ self.onmessage = async (e) => {
     
     const t_f1_start = performance.now();
     
+    // ★★★ バグ修正: imageData を imageDataArray として受け取る ★★★
     const { 
-        imageData, tileData, tileSize, width, height, 
+        imageDataArray, tileData, tileSize, width, height, // ★ 修正 
         brightnessCompensation, textureWeight,
         startY, endY,
         // F2描画用のデータ
@@ -177,7 +178,6 @@ self.onmessage = async (e) => {
     let f1Time = 0;
     
     // ★★★ Hプラン修正: F1スキップロジックを削除 ★★★
-    // if (isRerender) { ... } ブロックを削除
     // 常にF1計算を実行する
     
     // F1計算を通常実行
@@ -217,7 +217,12 @@ self.onmessage = async (e) => {
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                 for (let px = x; px < x + currentBlockWidth; px++) {
                     const i = (py * width + px) * 4;
-                    const r = imageData.data[i]; const g = imageData.data[i + 1]; const b = imageData.data[i + 2];
+                    
+                    // ★★★ バグ修正: imageData.data[i] ではなく imageDataArray[i] を参照 ★★★
+                    const r = imageDataArray[i]; 
+                    const g = imageDataArray[i + 1]; 
+                    const b = imageDataArray[i + 2];
+                    
                     r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
                     const col = (px < oneThirdX) ? 0 : (px < twoThirdsX ? 1 : 2);
                     const gridIndex = row * 3 + col;
@@ -324,7 +329,6 @@ self.onmessage = async (e) => {
     f1Time = (t_f1_end - t_f1_start) / 1000.0;
     
     // ★★★ Hプラン修正: F1完了時のIndexedDB保存ロジックを削除 ★★★
-    // try { ... idbKeyval.set(...) ... } ブロックを削除
     
     
     // ★ F2描画を開始
