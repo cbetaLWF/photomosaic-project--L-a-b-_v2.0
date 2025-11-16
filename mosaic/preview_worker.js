@@ -1,7 +1,3 @@
-{
-type: uploaded file
-fileName: preview_worker.js
-fullContent:
 // preview_worker.js
 // F2処理（プレビュー描画 + ブレンド）を完全に実行するWorker
 
@@ -144,7 +140,7 @@ async function renderMosaicPreviewWorker(
     const t_render_blend_end = performance.now();
     
     return { 
-        tileTime: t_render_tile_end - t_render_start,
+        tileTime: t_render_tile_end - t_start,
         blendTime: t_render_blend_end - t_render_tile_end
     };
 }
@@ -194,4 +190,3 @@ self.onmessage = async (e) => {
         self.postMessage({ type: 'error', message: `F2 Preview Worker failed: ${error.message}` });
     }
 };
-}
