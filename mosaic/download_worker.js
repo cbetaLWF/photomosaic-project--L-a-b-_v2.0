@@ -264,28 +264,46 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     
     try {
-        self.postMessage({ type: 'status', message: `F3 Worker 起動。データ(e.data)受信...` }); // ★ステータス修正
+        self.postMessage({ type: 'status', message: `F3 Worker 起動。データ(e.data)受信...` });
         
         const t_start = performance.now();
         
-        // ★★★ 修正: imageBuffer を受け取る ★★★
-        const { 
-            /* tileData, */
-            imageBuffer, tileSize, textureWeight,
-            sheetBitmaps,
-            mainImageBitmap, 
-            edgeImageBitmap, 
-            width, height,
-            lightParams, scale, quality
-        } = e.data;
+        // ★★★ 修正: 1行ずつプロパティにアクセスしてフリーズ箇所を特定 ★★★
+        self.postMessage({ type: 'status', message: `F3 e.data.imageBuffer にアクセス中...` });
+        const imageBuffer = e.data.imageBuffer;
+
+        self.postMessage({ type: 'status', message: `F3 e.data.sheetBitmaps にアクセス中...` });
+        const sheetBitmaps = e.data.sheetBitmaps;
+
+        self.postMessage({ type: 'status', message: `F3 e.data.mainImageBitmap にアクセス中...` });
+        const mainImageBitmap = e.data.mainImageBitmap;
+
+        self.postMessage({ type: 'status', message: `F3 e.data.lightParams にアクセス中...` });
+        const lightParams = e.data.lightParams;
+
+        self.postMessage({ type: 'status', message: `F3 e.data.tileSize にアクセス中...` });
+        const tileSize = e.data.tileSize;
+        
+        // (他のシンプルなプロパティも同様に取得)
+        self.postMessage({ type: 'status', message: `F3 e.data.width にアクセス中...` });
+        const width = e.data.width;
+        const height = e.data.height;
+        const textureWeight = e.data.textureWeight;
+        const scale = e.data.scale;
+        const quality = e.data.quality;
+        const edgeImageBitmap = e.data.edgeImageBitmap;
+
+        self.postMessage({ type: 'status', message: `F3 e.data 全プロパティのアクセス完了。` });
+        // ★★★ 修正ここまで ★★★
+
 
         // ★★★ 修正: バッファから配列を再構築 ★★★
         const imageDataArray = new Uint8ClampedArray(imageBuffer);
 
-        self.postMessage({ type: 'status', message: `F3 Worker 必須データを検証中...` }); // ★ステータス修正
+        self.postMessage({ type: 'status', message: `F3 Worker 必須データを検証中...` });
 
         // ★★★ 修正: 必須データの「事前検証」 (Sanity Check) ★★★
-        if (!imageDataArray || imageDataArray.length === 0) { // ★修正
+        if (!imageDataArray || imageDataArray.length === 0) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が空か、構築に失敗しました。");
         }
         if (!sheetBitmaps || sheetBitmaps.size === 0) {
@@ -298,7 +316,6 @@ self.onmessage = async (e) => {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
         
-        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
         const t_json_fetch_start = performance.now();
         const tileData = await getTileData("F3:");
         const t_json_fetch_end = performance.now();
