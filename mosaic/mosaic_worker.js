@@ -1,4 +1,4 @@
-// mosaic_worker.js (Hプラン: postMessage の競合フリーズ対策)
+// mosaic_worker.js (Hプラン: 1行ずつプロパティにアクセスしてフリーズ箇所を特定)
 
 let tileDataCache = null;
 
@@ -143,29 +143,62 @@ async function renderMosaicPreview(
 self.onmessage = async (e) => {
     
     try {
-        self.postMessage({ type: 'status', message: `起動。データ(e.data)受信...` }); // ★ステータス修正
+        self.postMessage({ type: 'status', message: `起動。データ(e.data)受信...` });
         
         const t_f1_start = performance.now();
         
-        // ★★★ 修正: imageBuffer を受け取る ★★★
-        const { 
-            imageBuffer, /* imageDataArray, tileData, */ tileSize, width, height, 
-            brightnessCompensation, textureWeight,
-            startY, endY,
-            mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams,
-            isRerender
-        } = e.data;
+        // ★★★ 修正: 1行ずつプロパティにアクセスしてフリーズ箇所を特定 ★★★
+        self.postMessage({ type: 'status', message: `e.data.imageBuffer にアクセス中...` });
+        const imageBuffer = e.data.imageBuffer;
+
+        self.postMessage({ type: 'status', message: `e.data.mainImageBitmap にアクセス中...` });
+        const mainImageBitmap = e.data.mainImageBitmap;
+
+        self.postMessage({ type: 'status', message: `e.data.thumbSheetBitmap にアクセス中...` });
+        const thumbSheetBitmap = e.data.thumbSheetBitmap;
+
+        self.postMessage({ type: 'status', message: `e.data.lightParams にアクセス中...` });
+        const lightParams = e.data.lightParams;
+
+        self.postMessage({ type: 'status', message: `e.data.tileSize にアクセス中...` });
+        const tileSize = e.data.tileSize;
+
+        self.postMessage({ type: 'status', message: `e.data.width にアクセス中...` });
+        const width = e.data.width;
+
+        self.postMessage({ type: 'status', message: `e.data.height にアクセス中...` });
+        const height = e.data.height;
+
+        self.postMessage({ type: 'status', message: `e.data.brightnessCompensation にアクセス中...` });
+        const brightnessCompensation = e.data.brightnessCompensation;
+
+        self.postMessage({ type: 'status', message: `e.data.textureWeight にアクセス中...` });
+        const textureWeight = e.data.textureWeight;
+
+        self.postMessage({ type: 'status', message: `e.data.startY にアクセス中...` });
+        const startY = e.data.startY;
+
+        self.postMessage({ type: 'status', message: `e.data.endY にアクセス中...` });
+        const endY = e.data.endY;
+
+        self.postMessage({ type: 'status', message: `e.data.isRerender にアクセス中...` });
+        const isRerender = e.data.isRerender;
+
+        self.postMessage({ type: 'status', message: `e.data.edgeImageBitmap にアクセス中...` });
+        const edgeImageBitmap = e.data.edgeImageBitmap; // (nullかもしれないので最後に)
+
+        self.postMessage({ type: 'status', message: `e.data 全プロパティのアクセス完了。` });
+        // ★★★ 修正ここまで ★★★
         
-        // ★★★ 修正: バッファから配列を再構築 ★★★
+        // バッファから配列を再構築
         const imageDataArray = new Uint8ClampedArray(imageBuffer);
 
-        self.postMessage({ type: 'status', message: `必須データを検証中...` }); // ★ステータス修正
+        self.postMessage({ type: 'status', message: `必須データを検証中...` });
 
         // ( ... 事前検証 (Sanity Check) ... )
-        if (!imageDataArray || imageDataArray.length === 0) { // ★修正
+        if (!imageDataArray || imageDataArray.length === 0) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が空か、構築に失敗しました。");
         }
-        // (tileData は fetch するのでここでは検証しない)
         if (!mainImageBitmap) {
             throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
         }
@@ -179,8 +212,6 @@ self.onmessage = async (e) => {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
         
-        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
-        // (検証の後、F1計算の前に移動)
         const tileData = await getTileData();
 
         self.postMessage({ type: 'status', message: `検証完了。F1計算ループを開始...` });
