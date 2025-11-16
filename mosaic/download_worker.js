@@ -1,11 +1,9 @@
 // download_worker.js
-// Hプラン: F1計算を再実行 + F3高解像度描画 + JPEGエンコード
+// Hプラン: 無限ループ対策
 
-// ( ... L*a*b*ヘルパー関数群 ... )
-// ( ... runF1Calculation (F1計算) 関数 ... )
-// ( ... renderMosaicWorker (F3描画) 関数 ... )
-// (上記3つは変更なし)
-
+// ( ... L*a*b*ヘルパー関数群 (変更なし) ... )
+// ( ... runF1Calculation (F1計算) 関数 (変更なし) ... )
+// ( ... renderMosaicWorker (F3描画) 関数 (変更なし) ... )
 const REF_X = 95.047; // D65
 const REF_Y = 100.000;
 const REF_Z = 108.883;
@@ -138,8 +136,8 @@ function runF1Calculation(
                 usageCount.set(bestMatchPattern.l_vector.toString(), (usageCount.get(bestMatchPattern.l_vector.toString()) || 0) + 1);
                 lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
             }
-        } // xループの終わり
-    } // yループの終わり
+        } 
+    } 
     return results;
 }
 async function renderMosaicWorker(
@@ -223,7 +221,7 @@ async function renderMosaicWorker(
         ctx.filter = 'none';
     }
     const t_render_end = performance.now();
-    ctx.restore(); // クリッピングを解除
+    ctx.restore(); 
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -270,7 +268,11 @@ self.onmessage = async (e) => {
             throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
         }
         
-        // 1. Worker内でOffscreenCanvasを作成
+        // ★★★ 修正: 無限ループ対策 (tileSizeの検証) ★★★
+        if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
+            throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
+        }
+        
         const highResCanvas = new OffscreenCanvas(width * scale, height * scale);
 
         // ★ Hプラン: F3-A1 (F1計算をこのWorkerで再実行) ★
@@ -284,7 +286,7 @@ self.onmessage = async (e) => {
             throw new Error("F1 re-calculation failed or produced no results.");
         }
         const t_f1_end = performance.now();
-        const f1Time = t_f1_end - t_f1_start; // F3-A1 (F1 Re-Calc)
+        const f1Time = t_f1_end - t_f1_start; 
 
         // 2. 描画処理を実行 (F3-A2)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
@@ -326,15 +328,16 @@ self.onmessage = async (e) => {
         
     // ★★★ 修正: catch ブロックを追加 ★★★
     } catch (error) {
-        // クラッシュした場合、メインスレッドに詳細なエラーを報告する
         let detailedMessage = `F3 Download Worker CRASH: ${error.message}\n`;
         if (error.stack) {
             detailedMessage += `Stack: ${error.stack}`;
         }
         
-        // 過去のバグに基づき、具体的なヒントを追加
         if (error.message.includes("Cannot read properties of null") || error.message.includes("undefined")) {
             detailedMessage += "\nHint: 'imageDataArray' または 'tileData' が null または undefined のまま使用されようとしました。";
+        }
+        if (error.message.includes("Invalid tile size")) {
+             detailedMessage += "\nHint: タイルサイズに 0 または NaN が指定されました。";
         }
         
         self.postMessage({ 
