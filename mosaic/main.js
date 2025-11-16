@@ -223,7 +223,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         statusText.textContent = 'ステータス: tile_data.jsonをロード中...';
         const response = await fetch('tile_data.json');
-        if (!response.ok) { throw new Error(`tile_data.json のロードに失敗しました (HTTP ${response.status})。`); }
+        
+        // ★ 修正点: ネットワークエラーを詳細に表示
+        if (!response.ok) { 
+            //例: 404 Not Found
+            throw new Error(`HTTP ${response.status} - ${response.statusText}`); 
+        }
+        
         tileData = await response.json();
         
         // ★ 修正: スプライトシート用のJSON構造を検証
@@ -245,9 +251,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         thumbSheetImage.src = tileData.tileSets.thumb.sheetUrl;
 
     } catch (error) {
-        statusText.textContent = `エラー: ${error.message}`;
-        console.error("Initialization Error:", error);
-        return;
+        // ★ 修正点: ネットワークエラーか、JSONパースエラーかを明記
+        console.error("Initialization Error:", error); // コンソールに完全なエラーを出力
+        
+        if (error instanceof TypeError) {
+             //例: fetch自体が失敗 (CORS or ネットワークオフライン)
+             statusText.textContent = `エラー: ネットワーク接続に失敗しました (CORS or 接続拒否)。${error.message}`;
+        } else if (error.message.includes('HTTP')) {
+             //例: 404 Not Found
+             statusText.textContent = `エラー: tile_data.json のロードに失敗しました (${error.message})。ファイルが正しい場所に配置されているか確認してください。`;
+        } else {
+             //例: JSONが壊れている
+             statusText.textContent = `エラー: tile_data.json の解析に失敗しました。ファイルが破損している可能性があります。${error.message}`;
+        }
+        return; // エラーが起きたらここで停止
     }
     
     // ( ... 2. メイン画像アップロード (推奨値/線画計算) ... )
