@@ -1,4 +1,4 @@
-// main.js (Hプラン: 競合フリーズ対策 - 全オブジェクトをクローン)
+// main.js (Hプラン: ハイブリッド戦略 - Bitmap転送 + Bufferコピー)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
@@ -450,7 +450,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const thumbSheetBitmap = await createImageBitmap(thumbSheetImage);
             
             let imageData = null;
-            // ★★★ 修正: 競合フリーズ対策 - transferList を初期化 ★★★
+            // ★★★ 修正: ハイブリッド戦略 - transferList には Bitmap のみ ★★★
             let transferList = [mainImageBitmap, thumbSheetBitmap];
             if (edgeImageBitmap) transferList.push(edgeImageBitmap);
 
@@ -459,8 +459,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             mainCtx.drawImage(mainImage, 0, 0); 
             imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
             
-            // ★★★ 修正: 競合フリーズ対策 - imageBuffer を transferList に追加しない ★★★
-            // transferList.push(imageData.data.buffer); // <-- 削除 (コピーさせる)
+            // ★★★ 修正: imageBuffer は transferList に含めない (コピーさせる) ★★★
             
             const t_f1f2_bitmap_end = performance.now();
             
@@ -506,10 +505,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     terminateWorkers(); 
                 };
                 
-                // ★★★ 修正: 第2引数 (transferList) を削除 ★★★
+                // ★★★ 修正: 第2引数 (transferList) を復活 ★★★
                 hybridWorker.postMessage({
                     // F1用
-                    imageBuffer: imageData.data.buffer, 
+                    imageBuffer: imageData.data.buffer, // (これはコピーされる)
                     tileSize: heavyParams.tileSize,
                     width: mainImage.width,
                     height: mainImage.height,
@@ -519,14 +518,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     endY: mainImage.height, 
                     
                     // F2用
-                    mainImageBitmap: mainImageBitmap,
-                    edgeImageBitmap: edgeImageBitmap,
-                    thumbSheetBitmap: thumbSheetBitmap,
+                    mainImageBitmap: mainImageBitmap,     // (これは転送される)
+                    edgeImageBitmap: edgeImageBitmap,     // (これは転送される)
+                    thumbSheetBitmap: thumbSheetBitmap, // (これは転送される)
                     lightParams: lightParams,
                     
                     isRerender: isRerender
                     
-                }); // <-- transferList を削除
+                }, transferList); // ★ 修正: transferList (Bitmapのみ) を指定
             });
             
             await workerPromise; 
@@ -617,8 +616,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
                     
                     const bitmapsToSend = new Map();
-                    // ★★★ 修正: 競合フリーズ対策 - transferList を初期化 ★★★
-                    let transferList = [mainImageBitmap]; 
+                    // ★★★ 修正: ハイブリッド戦略 - transferList には Bitmap のみ ★★★
+                    let transferList = [mainImageBitmap];
                     if (edgeImageBitmap) transferList.push(edgeImageBitmap);
                     
                     let totalSendSize = 0;
@@ -631,7 +630,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 createImageBitmap(new Blob([buffer]))
                                     .then(bitmap => {
                                         bitmapsToSend.set(index, bitmap);
-                                        transferList.push(bitmap); // ★ Bitmapの転送はOK
+                                        transferList.push(bitmap); // ★ F3スプライトシートも転送
                                     })
                             );
                         } else {
@@ -675,22 +674,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                             terminateWorkers(); 
                         };
                         
-                        // ★★★ 修正: 第2引数 (transferList) をBitmapのみに限定 ★★★
+                        // ★★★ 修正: 第2引数 (transferList) を復活 ★★★
                         downloadWorker.postMessage({
-                            sheetBitmaps: bitmapsToSend, 
+                            sheetBitmaps: bitmapsToSend, // (これは転送される)
                             
-                            imageBuffer: imageData.data.buffer, // ★ imageBufferはコピー
+                            imageBuffer: imageData.data.buffer, // (これはコピーされる)
                             tileSize: tileSize,
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
-                            mainImageBitmap: mainImageBitmap, 
-                            edgeImageBitmap: edgeImageBitmap,
+                            mainImageBitmap: mainImageBitmap, // (これは転送される)
+                            edgeImageBitmap: edgeImageBitmap, // (これは転送される)
                             width: mainImage.width,
                             height: mainImage.height,
                             lightParams: lightParams,
                             scale: f3_scale, 
                             quality: f3_quality
-                        }, transferList); // ★ 修正: transferList には Bitmap のみ含まれる
+                        }, transferList); // ★ 修正: transferList (Bitmapのみ) を指定
                     });
                     
                     const blob = await workerPromise;
