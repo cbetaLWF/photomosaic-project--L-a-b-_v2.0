@@ -1,71 +1,12 @@
 // download_worker.js
 // F3処理（高解像度描画 + JPEGエンコード）を完全に実行するWorker
 
-// ★★★ 修正点: ネットワークI/Oロジック (Bプラン) を復活 ★★★
-
-// (F2/F3-A共通の並列ロード制御キュー)
-async function runBatchedLoads(tilePromises, maxConcurrency) {
-    const running = [];
-
-    for (const promise of tilePromises) {
-        // 実行中の配列に新しいPromiseを追加
-        const p = promise.then(result => {
-            // Promiseが解決したら、実行中の配列から自身を削除
-            running.splice(running.indexOf(p), 1);
-            return result;
-        });
-
-        running.push(p);
-
-        // 同時実行数の上限を超えたら、最も古いPromiseの完了を待つ
-        if (running.length >= maxConcurrency) {
-            await Promise.race(running);
-        }
-    }
-    // 残りのすべてのPromiseが完了するのを待つ
-    return Promise.all(running);
-}
-
-// ★★★ 修正点: 安定性メトリクスのためのグローバルカウンター ★★★
-let totalRetryCount = 0;
-let totalFailCount = 0;
-
-// ★★★ 修正点: 画像ロード、リトライカウント、サイズ取得 (Bプラン) ★★★
-async function fetchImageWithRetry(url, maxRetries = 3) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            // ★★★ 最重要修正点: { mode: 'cors' } を追加 ★★★
-            // main.js のプリロードとリクエストを一致させ、キャッシュを有効にする
-            const response = await fetch(url, { mode: 'cors' });
-            
-            if (!response.ok) {
-                if (response.status !== 404) {
-                    throw new Error(`HTTP Error: ${response.status}`);
-                }
-                throw new Error(`Non-retryable Error: Status ${response.status}`);
-            }
-            
-            const blob = await response.blob();
-            const bitmap = await createImageBitmap(blob);
-            
-            return { bitmap: bitmap, size: blob.size }; 
-            
-        } catch (error) {
-            totalRetryCount++; 
-
-            if (attempt === maxRetries) {
-                totalFailCount++; 
-                throw new Error(`Final fetch failure after ${maxRetries} attempts: ${error.message}`);
-            }
-            console.warn(`Fetch attempt ${attempt} failed for ${url}. Retrying...`);
-            await new Promise(r => setTimeout(r, 500 * attempt)); 
-        }
-    }
-}
+// ★★★ 修正点: ネットワークI/Oロジック (A, Bプラン) を全て削除 ★★★
+// (I/O と Bitmap変換は メインスレッド (main.js) が担当する)
 
 
 /**
- * Worker内で実行されるrenderMosaicのコピー (タイル画像ロードのロジックを含む)
+ * Worker内で実行されるrenderMosaicのコピー (Cプラン)
  */
 async function renderMosaicWorker(
     canvas, 
@@ -73,7 +14,7 @@ async function renderMosaicWorker(
     results, // F1のレシピ
     mainImageBitmap, 
     edgeImageBitmap, 
-    fullSheetBitmaps, // ★ 修正: Bプランでロード済みのF3スプライトシート (Map)
+    fullSheetBitmaps, // ★ 修正: Cプラン (メインスレッドで生成済みのImageBitmap Map)
     width, height,
     lightParams, scale
 ) {
@@ -166,7 +107,7 @@ async function renderMosaicWorker(
 
         // 5. 描画実行
         if (!sourceSheet) {
-            // ★ 修正: Mapに存在しない (fetch失敗)
+            // ★ 修正: Mapに存在しない (転送失敗)
             console.error(`F3スプライトシート[${sheetIndex}]が見つかりません。フォールバック描画します。`);
             const grayValue = Math.round(tileResult.targetL * 2.55); 
             ctx.fillStyle = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; 
@@ -210,16 +151,11 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     const t_start = performance.now();
     
-    // ★★★ 修正点: 安定性メトリクスのリセット ★★★
-    totalRetryCount = 0;
-    totalFailCount = 0;
-    
     const { 
-        tileData, 
+        tileData,
         cachedResults, // F1の結果
-        // ★ 修正: sheetBuffers の代わりに requiredSheetIndices を受け取る
-        requiredSheetIndices, // ★ 修正: 必須シートリスト
-        // sheetBuffers,
+        // ★ 修正: Cプラン: ImageBitmap Map を受け取る
+        sheetBitmaps, // Map<number, ImageBitmap>
         mainImageBitmap, 
         edgeImageBitmap, 
         width, height,
@@ -230,45 +166,15 @@ self.onmessage = async (e) => {
         // 1. Worker内でOffscreenCanvasを作成
         const highResCanvas = new OffscreenCanvas(width * scale, height * scale);
 
-        // ★★★ 修正: F3-A1 (Bプラン: キャッシュからのfetch) ★★★
+        // ★★★ 修正: F3-A1 (I/O) は不要 ★★★
+        // (Bitmapはメインスレッドから転送済み)
         const t_load_start = performance.now();
-        
-        const fullSet = tileData.tileSets.full;
-        let totalLoadSize = 0;
-        const fullSheetBitmaps = new Map(); // <number, ImageBitmap>
-        
-        // ★ 修正: 必須リスト (requiredSheetIndices) に基づいてロード
-        const sheetPromises = requiredSheetIndices.map(index => 
-            (async () => {
-                const url = fullSet.sheetUrls[index];
-                if (!url) {
-                    console.error(`No URL found for sheet index ${index}`);
-                    return; // スキップ
-                }
-                
-                try {
-                    // ★ 修正: Bプランの fetch を実行
-                    const result = await fetchImageWithRetry(url, 3);
-                    totalLoadSize += result.size;
-                    fullSheetBitmaps.set(index, result.bitmap); // ★ 修正: Mapにインデックスで格納
-                } catch (error) {
-                    console.error(`Worker failed to load F3 sheet ${url}: ${error.message}`);
-                    // totalFailCountはfetchImageWithRetry内でカウントされる
-                }
-            })()
-        );
-        
-        // ★ 修正: F3-A1のI/Oスロットリングを回避するため、並列数を50に設定
-        await runBatchedLoads(sheetPromises, 50);
-        
-        const t_load_end = performance.now();
-        const loadTime = t_load_end - t_load_start;
         // ★★★ 修正ここまで ★★★
 
         // 2. 描画処理を実行 (F3-A2) (変更なし)
         const { canvas: finalCanvas, renderTime } = await renderMosaicWorker(
             highResCanvas, tileData, cachedResults, mainImageBitmap, edgeImageBitmap, 
-            fullSheetBitmaps, 
+            sheetBitmaps, // ★ 修正: CプランのMapを渡す
             width, height, lightParams, scale
         );
         
@@ -286,7 +192,9 @@ self.onmessage = async (e) => {
         const totalTime = t_encode_end - t_start;
         const encodeTime = t_encode_end - t_encode_start;
         const finalFileSizeMB = blob.size / 1024 / 1024;
-        const totalLoadSizeMB = totalLoadSize / 1024 / 1024;
+        
+        // ★ 修正: F3-A1の時間は 0 (または ほぼ0) になる
+        const loadTime = t_load_start - t_start; // (実質0)
 
         // 4. メインスレッドに結果を返送
         self.postMessage({ 
@@ -294,14 +202,14 @@ self.onmessage = async (e) => {
             buffer: buffer, 
             mimeType: mimeType,
             totalTime: totalTime / 1000.0,
-            loadTime: loadTime / 1000.0, // ★ F3-A1 (Load Cache)
+            loadTime: loadTime / 1000.0, // ★ F3-A1 (実質0)
             renderTime: renderTime / 1000.0,
             encodeTime: encodeTime / 1000.0,
             // ★★★ 修正点: 詳細メトリクス ★★★
-            sheetCount: requiredSheetIndices.length, // ★ 修正: 実際にロードした枚数
-            totalLoadSizeMB: totalLoadSizeMB,
-            retryCount: totalRetryCount, // ★ 修正: Bプランで復活
-            failCount: totalFailCount, // ★ 修正: Bプランで復活
+            sheetCount: sheetBitmaps.size, // ★ 修正: 実際に処理した枚数
+            totalLoadSizeMB: 0, // ★ 修正: WorkerはI/Oしない
+            retryCount: 0, 
+            failCount: 0,  
             finalFileSizeMB: finalFileSizeMB
         }, [buffer]); // ArrayBufferを転送リストに追加
         
