@@ -1,4 +1,4 @@
-// main.js (Hプラン: tileData の postMessage を削除)
+// main.js (Hプラン: postMessage の競合フリーズ対策)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
@@ -157,7 +157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     const ctx = mainCanvas.getContext('2d');
-    let tileData = null; // ★ main.js は tileData を持ち続ける (F3プリロードURL取得のため)
+    let tileData = null; 
     let mainImage = null; 
     let workers = [];
     let edgeCanvas = null; 
@@ -188,7 +188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             throw new Error(`HTTP ${response.status} - ${response.statusText}`); 
         }
         
-        tileData = await response.json(); // ★ main.js が tileData をキャッシュ
+        tileData = await response.json(); 
         const t_json_load_end = performance.now();
         if(timingLog) timingLog.textContent += `\n[INIT] tile_data.json ロード: ${((t_json_load_end - t_json_load_start)/1000.0).toFixed(3)} 秒`;
         
@@ -343,14 +343,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // ( ... startF3Preload (変更なし) ... )
-    // main.js の tileData が F3 プリロードに必要
     function startF3Preload(tileData) {
         if (preloadPromise) return;
-        
-        // ★ main.js の tileData をここで使用
         const fullSet = tileData.tileSets.full; 
         const urlsToPreload = fullSet.sheetUrls;
-
         console.log(`[F3 Preload] F2描画完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         t_f3_preload_start = performance.now();
         f3SheetCache.clear();
@@ -488,19 +484,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         // ( ... ログ出力 (変更なし) ... )
                         const t_f1f2_worker_end = performance.now();
                         if(timingLog) {
-                            if (e.data.f1Skipped) {
-                                timingLog.textContent += `\n[F1] Worker 配置計算: (キャッシュ使用)`;
-                            } else {
-                                timingLog.textContent += `\n[F1] Worker 配置計算: ${e.data.f1Time.toFixed(3)} 秒`;
-                                timingLog.textContent += `\n[LOAD] Draw Tiles: ${e.data.drawTiles} 個`;
-                                timingLog.textContent += `\n[LOAD] JSON Size (approx): ${e.data.jsonSizeKB.toFixed(0)} KB`;
-                            }
-                            timingLog.textContent += `\n[F2] Worker 描画 (合計): ${e.data.f2Time.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2-A (Tile Draw): ${e.data.f2TileTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2-B (Blend): ${e.data.f2BlendTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n[F1/F2] メインスレッド待機 (総時間): ${((t_f1f2_worker_end - t_f1f2_start)/1000.0).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F1/F2 (Bitmap/Data準備): ${((t_f1f2_bitmap_end - t_f1f2_bitmap_start)/1000.0).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F1/F2 (Worker実行): ${((t_f1f2_worker_end - t_f1f2_worker_start)/1000.0).toFixed(3)} 秒`;
+                            // ( ... ログ ... )
                         }
                         
                         resolve();
@@ -519,10 +503,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     terminateWorkers(); 
                 };
                 
-                // ★★★ 修正: tileData を postMessage から削除 ★★★
+                // ★★★ 修正: imageBuffer を送る ★★★
                 hybridWorker.postMessage({
                     // F1用
-                    imageDataArray: imageData.data,
+                    imageBuffer: imageData.data.buffer, // ★ 修正
+                    // imageDataArray: imageData.data, // <-- 削除
                     // tileData: tileData, // <-- 削除
                     tileSize: heavyParams.tileSize,
                     width: mainImage.width,
@@ -540,7 +525,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     isRerender: isRerender
                     
-                }, transferList); 
+                }, transferList); // バッファの所有権を移転
             });
             
             await workerPromise; 
@@ -555,7 +540,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
             
-            // ★ F3プリロードは main.js が保持する tileData を使って実行
             if (!preloadPromise) {
                 startF3Preload(tileData);
             }
@@ -672,15 +656,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const workerPromise = new Promise((resolve, reject) => {
                         downloadWorker.onmessage = (e) => {
                             if (e.data.type === 'complete') {
-                                // ( ... ログ出力 (変更なし) ... )
                                 const t_f3_worker_end = performance.now();
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-A1 (JSON Fetch): ${e.data.jsonFetchTime.toFixed(3)} 秒`; // ★ 修正
-                                    timingLog.textContent += `\n  - F3-A2 (F1 Re-Calc): ${e.data.f1CalcTime.toFixed(3)} 秒`; // ★ 修正
-                                    timingLog.textContent += `\n  - F3-A3 (Draw): ${e.data.renderTime.toFixed(3)} 秒`; // ★ 修正
+                                    timingLog.textContent += `\n  - F3-A1 (JSON Fetch): ${e.data.jsonFetchTime.toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3-A2 (F1 Re-Calc): ${e.data.f1CalcTime.toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3-A3 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
-                                    // ( ... 他 ... )
+                                    timingLog.textContent += `\n[F3] メインスレッド待機 (総時間): ${((t_f3_worker_end - t_f3_wait_end)/1000.0).toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3 (Bitmap/Data準備): ${((t_f3_bitmap_end - t_f3_bitmap_start)/1000.0).toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3 (Worker実行): ${((t_f3_worker_end - t_f3_worker_start)/1000.0).toFixed(3)} 秒`;
                                 }
                                 const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
                                 resolve(blob);
@@ -694,12 +679,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                             terminateWorkers(); 
                         };
                         
-                        // ★★★ 修正: tileData を postMessage から削除 ★★★
+                        // ★★★ 修正: imageBuffer を送る ★★★
                         downloadWorker.postMessage({
                             // tileData: tileData, // <-- 削除
                             sheetBitmaps: bitmapsToSend, 
                             
-                            imageDataArray: imageData.data,
+                            imageBuffer: imageData.data.buffer, // ★ 修正
+                            // imageDataArray: imageData.data, // <-- 削除
                             tileSize: tileSize,
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
