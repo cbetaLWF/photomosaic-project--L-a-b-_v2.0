@@ -1,4 +1,9 @@
-// mosaic_worker.js (F1:計算 + F2:プレビュー描画 ハイブリッド)
+// mosaic_worker.js (F1: 計算 + IndexedDB保存)
+
+// 1. IndexedDBライブラリのインポート
+importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js');
+// (idbKeyval.set, idbKeyval.get が利用可能になる)
+
 
 // L*a*b*変換のための定数とヘルパー関数
 const REF_X = 95.047; // D65
@@ -24,131 +29,11 @@ function rgbToLab(r, g, b) {
     return { l: l, a: a, b_star: b_star };
 }
 
-// 平均RGBからL*値のみを返す簡易ヘルパー
 function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
-// ★★★ 修正点: F2描画ロジックを (旧preview_worker.jsから) 移植 ★★★
-async function renderMosaicPreview(
-    canvas, 
-    tileData, 
-    results, // F1の計算結果 (ローカル)
-    mainImageBitmap, 
-    edgeImageBitmap, 
-    thumbSheetBitmap, // F2用のサムネイルBitmap
-    width, height,
-    lightParams
-) {
-    const t_render_start = performance.now(); 
-
-    const canvasWidth = width;
-    const canvasHeight = height;
-    
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, canvasWidth, canvasHeight); 
-    ctx.clip(); 
-
-    const MIN_TILE_L = 5.0; 
-    const MAX_BRIGHTNESS_RATIO = 5.0; 
-    const brightnessFactor = lightParams.brightnessCompensation / 100; 
-
-    const thumbSet = tileData.tileSets.thumb;
-    const thumbTileW = thumbSet.tileWidth;
-    const thumbTileH = thumbSet.tileHeight;
-    
-    // ★ F2描画ループ
-    for (const tileResult of results) {
-        
-        const tileInfo = tileData.tiles[tileResult.tileId];
-        if (!tileInfo) continue;
-        
-        const pattern = tileInfo.patterns.find(p => p.type === tileResult.patternType);
-        if (!pattern) continue;
-        
-        // 1. 明度補正
-        let targetL = tileResult.targetL; 
-        let tileL = pattern.l; 
-        if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
-        let brightnessRatio = targetL / tileL; 
-        if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
-            brightnessRatio = MAX_BRIGHTNESS_RATIO;
-        }
-        const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
-        ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-
-        // 2. 描画座標
-        const dx = tileResult.x;
-        const dy = tileResult.y;
-        const dWidth = tileResult.width;
-        const dHeight = tileResult.height; 
-        
-        // 3. ソース座標
-        const coords = tileInfo.thumbCoords;
-        const sourceSheet = thumbSheetBitmap; 
-        
-        // 4. クロップ計算
-        const sSize = Math.min(thumbTileW, thumbTileH);
-        const isHorizontal = thumbTileW > thumbTileH;
-        
-        let sx = coords.x;
-        let sy = coords.y;
-        
-        const typeParts = tileResult.patternType.split('_'); 
-        const cropType = typeParts[0]; 
-        const flipType = typeParts[1]; 
-        
-        if (isHorizontal) {
-            if (cropType === "cropC") sx += Math.floor((thumbTileW - sSize) / 2);
-            else if (cropType === "cropR") sx += (thumbTileW - sSize);
-        } else {
-            if (cropType === "cropM") sy += Math.floor((thumbTileH - sSize) / 2);
-            else if (cropType === "cropB") sy += (thumbTileH - sSize);
-        }
-
-        // 5. 描画実行
-        ctx.save();
-        if (flipType === "flip1") {
-            ctx.scale(-1, 1);
-            ctx.drawImage(sourceSheet, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
-        } else {
-            ctx.drawImage(sourceSheet, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
-        }
-        ctx.restore();
-        ctx.filter = 'none';
-    }
-    
-    const t_render_tile_end = performance.now();
-    ctx.restore(); // クリッピングを解除
-
-    // 2段階ブレンド処理
-    if (lightParams.blendOpacity > 0 && mainImageBitmap) {
-        ctx.globalCompositeOperation = 'soft-light'; 
-        ctx.globalAlpha = lightParams.blendOpacity / 100;
-        ctx.drawImage(mainImageBitmap, 0, 0, canvasWidth, canvasHeight);
-    }
-    if (lightParams.edgeOpacity > 0 && edgeImageBitmap) {
-        ctx.globalCompositeOperation = 'multiply'; 
-        ctx.globalAlpha = lightParams.edgeOpacity / 100;
-        ctx.drawImage(edgeImageBitmap, 0, 0, canvasWidth, canvasHeight);
-    }
-    ctx.globalCompositeOperation = 'source-over'; 
-    ctx.globalAlpha = 1.0; 
-    
-    const t_render_blend_end = performance.now();
-    
-    return { 
-        tileTime: t_render_tile_end - t_render_start,
-        blendTime: t_render_blend_end - t_render_tile_end
-    };
-}
-// ★★★ F2ロジック 移植ここまで ★★★
+// ★★★ 修正: F2描画ロジックは全て削除 ★★★
 
 
 // Workerで受け取ったデータとタイルデータ配列を処理
@@ -159,14 +44,11 @@ self.onmessage = async (e) => {
     const { 
         imageData, tileData, tileSize, width, height, 
         brightnessCompensation, textureWeight,
-        startY, endY,
-        // ★ 修正: F2描画用のデータを追加で受け取る
-        mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams
+        startY, endY
+        // ★ 修正: F2用のデータは受け取らない
     } = e.data;
     
     const tiles = tileData.tiles;
-    
-    // ★ 修正: F1の計算結果 (cachedResults)
     const results = []; 
     
     const ASPECT_RATIO = 1.0; 
@@ -176,12 +58,10 @@ self.onmessage = async (e) => {
     const usageCount = new Map(); 
     const lastChoiceInRow = new Map();
 
-    // self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
-
     const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
     let processedRows = 0;
 
-    // --- F1: メインループ (計算) ---
+    // --- F1: メインループ (計算) (変更なし) ---
     for (let y = startY; y < endY; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
@@ -311,49 +191,33 @@ self.onmessage = async (e) => {
     } // yループの終わり
     
     const t_f1_end = performance.now();
+    const f1Time = (t_f1_end - t_f1_start) / 1000.0;
     
-    // ★ 修正: F1が完了したら、F2描画を開始
+    // ★★★ 修正点: Fプラン (並列実行) → Gプラン (単一実行) ★★★
+    // F1 Workerは常に全範囲 (startY=0) を実行する前提
     
-    // (F1が並列実行されている場合、このWorkerは担当範囲の結果(results)しか持っていない)
-    // (Fプランでは、F1は並列実行せず、1つのWorkerが全範囲を実行する必要がある)
-    // (→ main.js が startY=0, endY=height で 1回だけ呼び出す前提)
-    
-    if (startY === 0) { // このWorkerが全範囲を担当した場合のみF2描画を実行
+    if (startY === 0) {
         
-        self.postMessage({ type: 'status', message: `F1計算完了。F2プレビュー描画中...` });
+        self.postMessage({ type: 'status', message: `F1計算完了。結果をIndexedDBに保存中...` });
         
-        const t_f2_start = performance.now();
-        const previewCanvas = new OffscreenCanvas(width, height);
-
-        // F2描画処理を実行
-        const { tileTime, blendTime } = await renderMosaicPreview(
-            previewCanvas, tileData, results, // results = F1の全計算結果
-            mainImageBitmap, edgeImageBitmap, 
-            thumbSheetBitmap,
-            width, height, lightParams
-        );
-        
-        // F2のImageBitmapに変換
-        const finalBitmap = previewCanvas.transferToImageBitmap();
-        const t_f2_end = performance.now();
-
-        // メインスレッドに結果を返送
-        self.postMessage({ 
-            type: 'complete', 
-            // ★ 修正: F2のBitmapとログのみ返す
-            bitmap: finalBitmap,
-            f1Time: (t_f1_end - t_f1_start) / 1000.0,
-            f2Time: (t_f2_end - t_f2_start) / 1000.0,
-            f2TileTime: tileTime / 1000.0,
-            f2BlendTime: blendTime / 1000.0
-        }, [finalBitmap]); // ImageBitmapを転送
+        try {
+            // ★ 修正: 巨大JSONをIndexedDBに保存
+            await idbKeyval.set('cachedResults', results);
+            
+            // ★ 修正: メインスレッドにはF1の時間とJSONの統計情報のみ返す
+            self.postMessage({ 
+                type: 'f1_complete', // F1完了
+                f1Time: f1Time,
+                drawTiles: results.length,
+                jsonSizeKB: (JSON.stringify(results).length / 1024) // 概算
+            });
+            
+        } catch (error) {
+             self.postMessage({ type: 'error', message: `F1 failed during IndexedDB save: ${error.message}` });
+        }
         
     } else {
-        // (並列実行された場合 - Fプランではここには来ないはず)
-        // Fプランでは、F1の結果(JSON)だけを返す
-        self.postMessage({ 
-            type: 'f1_chunk_complete', 
-            results: results
-        });
+        // Gプランでは並列実行（f1_chunk_complete）はサポートしない
+         self.postMessage({ type: 'error', message: `F1 Worker received partial chunk (startY != 0), which is not supported in G-Plan.` });
     }
 };
