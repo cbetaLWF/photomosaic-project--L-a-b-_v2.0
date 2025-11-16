@@ -1,7 +1,8 @@
 // mosaic_worker.js (F1:計算 + F2:プレビュー描画 ハイブリッド)
 
-// ★ Gプランの名残: IndexedDBライブラリは不要
-// importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js');
+// ★★★ 修正点: FプランでもIndexedDBは必須 (F2再描画/F3連携のため) ★★★
+importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js');
+// (idbKeyval.set, idbKeyval.get が利用可能になる)
 
 
 // L*a*b*変換のための定数とヘルパー関数
