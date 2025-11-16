@@ -1,7 +1,3 @@
-{
-type: uploaded file
-fileName: main.js
-fullContent:
 // 線画抽出（Sobel）のためのヘルパー関数
 function applySobelFilter(imageData) {
     const width = imageData.width;
@@ -840,5 +836,4 @@ function downloadBlob(blob, fileName) {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }, 100); 
-}
 }
