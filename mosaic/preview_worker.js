@@ -140,7 +140,7 @@ async function renderMosaicPreviewWorker(
     const t_render_blend_end = performance.now();
     
     return { 
-        tileTime: t_render_tile_end - t_start,
+        tileTime: t_render_tile_end - t_render_start,
         blendTime: t_render_blend_end - t_render_tile_end
     };
 }
