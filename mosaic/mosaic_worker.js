@@ -1,4 +1,34 @@
-// mosaic_worker.js (Hプラン: 詳細ステータス報告 + 無限ループ対策)
+// mosaic_worker.js (Hプラン: tileData を fetch)
+
+// ★ 修正: tileData をWorker内でキャッシュする
+let tileDataCache = null;
+
+/**
+ * tile_data.json を fetch し、キャッシュする
+ */
+async function getTileData() {
+    if (tileDataCache) {
+        return tileDataCache;
+    }
+    
+    // ★ 修正: 詳細ステータス報告 ★
+    self.postMessage({ type: 'status', message: `tile_data.json を fetch 中...` });
+    
+    const response = await fetch('tile_data.json'); // Worker自身がfetch
+    if (!response.ok) {
+        throw new Error(`Worker Error: tile_data.json の fetch に失敗しました (${response.status})`);
+    }
+    tileDataCache = await response.json();
+    
+    // fetchしたデータを検証
+    if (!tileDataCache || !tileDataCache.tiles || tileDataCache.tiles.length === 0) {
+         throw new Error('Worker Error: fetch した tile_data.json が不正か空です。');
+    }
+    
+    self.postMessage({ type: 'status', message: `tile_data.json 読込完了。` });
+    return tileDataCache;
+}
+
 
 // ( ... L*a*b*ヘルパー関数群 (変更なし) ... )
 // ( ... renderMosaicPreview (F2描画) 関数 (変更なし) ... )
@@ -34,9 +64,7 @@ async function renderMosaicPreview(
     width, height,
     lightParams
 ) {
-    // ★ 修正: 詳細ステータス報告 (F2-A) ★
     self.postMessage({ type: 'status', message: `F2描画（タイル描画）を開始...` });
-    
     const t_render_start = performance.now(); 
     const canvasWidth = width;
     const canvasHeight = height;
@@ -100,10 +128,7 @@ async function renderMosaicPreview(
     }
     const t_render_tile_end = performance.now();
     ctx.restore(); 
-
-    // ★ 修正: 詳細ステータス報告 (F2-B) ★
     self.postMessage({ type: 'status', message: `F2描画（ブレンド処理）を開始...` });
-
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -128,26 +153,27 @@ async function renderMosaicPreview(
 self.onmessage = async (e) => {
     
     try {
-        // ★ 修正: 詳細ステータス報告 ★
         self.postMessage({ type: 'status', message: `起動。必須データを検証中...` });
         
         const t_f1_start = performance.now();
         
+        // ★★★ 修正: tileData を e.data から削除 ★★★
         const { 
-            imageDataArray, tileData, tileSize, width, height, 
+            imageDataArray, /* tileData, */ tileSize, width, height, 
             brightnessCompensation, textureWeight,
             startY, endY,
             mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams,
             isRerender
         } = e.data;
         
+        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
+        const tileData = await getTileData();
+
         // ( ... 事前検証 (Sanity Check) ... )
         if (!imageDataArray) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
         }
-        if (!tileData) {
-            throw new Error("Worker Error: 'tileData' (JSON) が main.js から渡されませんでした。");
-        }
+        // (tileData は getTileData() 内で検証済み)
         if (!mainImageBitmap) {
             throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
         }
@@ -161,7 +187,6 @@ self.onmessage = async (e) => {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
 
-        // ★ 修正: 詳細ステータス報告 ★
         self.postMessage({ type: 'status', message: `検証完了。F1計算ループを開始...` });
 
         const tiles = tileData.tiles;
@@ -286,8 +311,6 @@ self.onmessage = async (e) => {
                     lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
                 }
             } // xループの終わり
-
-            // ★ 修正: F1の進捗は'progress'で報告
             processedRows++;
             self.postMessage({ type: 'progress', progress: processedRows / totalRowsInChunk });
         } // yループの終わり
@@ -295,13 +318,11 @@ self.onmessage = async (e) => {
         const t_f1_end = performance.now();
         f1Time = (t_f1_end - t_f1_start) / 1000.0;
         
-        // ★ 修正: 詳細ステータス報告 ★
         self.postMessage({ type: 'status', message: `F1計算完了。F2描画準備中...` });
         
         const t_f2_start = performance.now();
         const previewCanvas = new OffscreenCanvas(width, height);
 
-        // F2描画処理 (内部で 'F2描画（タイル描画）' と 'F2描画（ブレンド処理）' を報告)
         const { tileTime, blendTime } = await renderMosaicPreview(
             previewCanvas, tileData, results,
             mainImageBitmap, edgeImageBitmap, 
@@ -314,10 +335,8 @@ self.onmessage = async (e) => {
         
         const f2Time = (t_f2_end - t_f2_start) / 1000.0;
 
-        // ★ 修正: 詳細ステータス報告 ★
         self.postMessage({ type: 'status', message: `F2描画完了。メインスレッドへ転送中...` });
 
-        // メインスレッドに結果を返送
         self.postMessage({ 
             type: 'complete', 
             bitmap: finalBitmap,
