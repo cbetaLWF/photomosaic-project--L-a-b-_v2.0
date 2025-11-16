@@ -191,15 +191,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ctx = mainCanvas.getContext('2d');
     let tileData = null; 
     let mainImage = null; 
-    let workers = []; 
+    let workers = []; // ★ 修正: F1/F2ハイブリッドWorker (1つだけ)
     let edgeCanvas = null; 
     let currentRecommendations = null;
-    let cachedResults = null; 
+    
+    // ★★★ 修正点: Fプラン (cachedResultsはWorkerが持つ) ★★★
+    let cachedResults = null; // F1/F2が完了したかどうかのフラグとしてのみ使用 (true/false)
+    
     let lastHeavyParams = {}; 
     let isGeneratingFullRes = false; 
     let lastGeneratedBlob = null; 
     let thumbSheetImage = null; 
-    let isGeneratingPreview = false;
+    
+    // ★ 修正: F2実行中フラグはF1と統合
+    // let isGeneratingPreview = false;
+    let isGeneratingF1F2 = false; // F1/F2ハイブリッドWorkerの実行フラグ
+    
     let preloadPromise = null; 
     
     // ★★★ 修正点: Cプラン (ハイブリッド・メモリキャッシュ) ★★★
@@ -428,18 +435,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
 
-    // --- 3. モザイク生成開始 (F1計算 + F2 Worker呼び出し) ---
+    // --- 3. モザイク生成開始 (F1/F2ハイブリッドWorker) ---
     generateButton.addEventListener('click', async () => {
         if (!mainImage || !edgeCanvas || !thumbSheetImage.complete) {
             statusText.textContent = 'エラー: メイン画像またはスプライトシートが準備できていません。';
             return; 
         }
-        if (workers.length > 0 || isGeneratingPreview || isGeneratingFullRes) {
+        // ★ 修正: F1/F2実行中 または F3実行中 はブロック
+        if (isGeneratingF1F2 || isGeneratingFullRes) {
             console.warn("[Button Click] 既に別の処理が実行中です。");
             return;
         }
 
-        terminateWorkers(); 
+        terminateWorkers(); // 古いWorkerをクリア
+        isGeneratingF1F2 = true; // ★ F1/F2実行フラグ
+        
         generateButton.disabled = true;
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
@@ -479,158 +489,79 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         // 3. キャッシュのチェック
+        // ★ 修正: Fプランでは、F1計算をスキップできない（JSONを持っていないため）
+        // (ただし、F2描画だけはスキップ可能)
         if (!isTileSizeChanged && cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
             
             // --- Case 1: 高速再描画 (F1スキップ) ---
-            statusText.textContent = 'ステータス: 描画パラメータのみ変更... 高速に再描画します。';
+            statusText.textContent = 'ステータス: F1計算は完了済み。F2描画のみ実行...';
             
             // ★ 計測: F2負荷（キャッシュ使用時）
             if (timingLog) {
                  timingLog.textContent += `\n[F1] (キャッシュ使用)`;
-                 timingLog.textContent += `\n[LOAD] Draw Tiles: ${cachedResults.length} 個`;
-                 try {
-                    timingLog.textContent += `\n[LOAD] JSON Size (approx): ${(JSON.stringify(cachedResults).length / 1024).toFixed(0)} KB`;
-                 } catch (e) { /* (JSON.stringifyが巨大すぎると失敗する可能性) */ }
+                 // FプランではJSONサイズは不明
+                 // timingLog.textContent += `\n[LOAD] Draw Tiles: ...`;
             }
             
+            // ★ 修正: F2描画のみをF1/F2 Workerに依頼
             await renderMosaicWithWorker(
                 mainCanvas,
-                cachedResults,
-                currentLightParams
+                currentLightParams,
+                true // isRerender = true
             );
             
+            isGeneratingF1F2 = false; // ★ F1/F2完了
             return; 
         }
         
-        // --- Case 2: 通常処理 (F1 Worker処理を実行) ---
+        // --- Case 2: 通常処理 (F1+F2 Worker処理を実行) ---
         cachedResults = null; 
         lastHeavyParams = currentHeavyParams; 
-        statusText.textContent = 'ステータス: タイル配置を計算中...';
+        statusText.textContent = 'ステータス: F1(計算) + F2(描画) をWorkerで実行中...';
         
-        const t_f1_start = performance.now(); 
+        // ★ 修正: F2描画のみをF1/F2 Workerに依頼
+        await renderMosaicWithWorker(
+            mainCanvas,
+            currentLightParams,
+            false // isRerender = false
+        );
         
-        ctx.clearRect(0, 0, mainImage.width, mainImage.height);
-        ctx.drawImage(mainImage, 0, 0); 
-        
-        const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
-        const numWorkers = navigator.hardwareConcurrency || 4;
-        statusText.textContent = `ステータス: ${numWorkers}コアを検出し、並列処理を開始...`;
-
-        let finishedWorkers = 0;
-        let allResults = [];
-        
-        // ( ... チャンク分けロジック (変更なし) ... )
-        const tileSize = currentHeavyParams.tileSize; 
-        const tileHeight = Math.round(tileSize * 1.0); 
-        if (tileHeight <= 0) {
-             statusText.textContent = 'エラー: タイルサイズが0以下です。';
-             generateButton.disabled = false;
-             return;
-        }
-        const alignedHeight = Math.ceil(mainImage.height / tileHeight) * tileHeight;
-        const chunkHeight = Math.ceil(alignedHeight / numWorkers / tileHeight) * tileHeight;
-        let startY = 0;
-        let activeWorkers = 0; 
-        
-        for (let i = 0; i < numWorkers; i++) {
-            const endY = Math.min(startY + chunkHeight, mainImage.height);
-            if (startY >= endY) continue; 
-            activeWorkers++; 
-            const worker = new Worker('mosaic_worker.js');
-            workers.push(worker); 
-            worker.onmessage = async (e) => { 
-                if (e.data.type === 'status') {
-                    statusText.textContent = `ステータス (Worker ${i+1}): ${e.data.message}`;
-                } else if (e.data.type === 'progress') {
-                    // ( ... プログレスバー ... )
-                } else if (e.data.type === 'complete') {
-                    allResults = allResults.concat(e.data.results);
-                    finishedWorkers++;
-                    
-                    if (finishedWorkers === activeWorkers) {
-                        // --- F1 (計算) 完了 ---
-                        const t_f1_end = performance.now();
-                        cachedResults = allResults; 
-                        
-                        // ★ 計測: F1完了ログ＋F2負荷
-                        if(timingLog) {
-                            timingLog.textContent += `\n[F1] Worker 配置計算: ${((t_f1_end - t_f1_start)/1000.0).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n[LOAD] Draw Tiles: ${cachedResults.length} 個`;
-                            try {
-                                timingLog.textContent += `\n[LOAD] JSON Size (approx): ${(JSON.stringify(cachedResults).length / 1024).toFixed(0)} KB`;
-                            } catch (e) { /* (JSON.stringifyが巨大すぎると失敗する可能性) */ }
-                        }
-
-                        statusText.textContent = 'ステータス: 全ワーカー処理完了。F2プレビュー描画中...';
-                        if (progressBar) progressBar.style.width = '100%';
-                        
-                        await renderMosaicWithWorker(
-                            mainCanvas,
-                            cachedResults, 
-                            currentLightParams
-                        );
-                        
-                        terminateWorkers(); 
-                    }
-                }
-            };
-            worker.onerror = (error) => {
-                 console.error("F1 Worker Error:", error.message);
-                 statusText.textContent = `エラー: F1 Worker ${i+1} が失敗しました。 ${error.message}`;
-                 terminateWorkers();
-                 generateButton.disabled = false;
-            };
-            
-            // ( ... F1 Worker 起動 (変更なし) ... )
-            worker.postMessage({ 
-                imageData: imageData, 
-                tileData: tileData, 
-                tileSize: currentHeavyParams.tileSize,
-                width: mainImage.width,
-                height: mainImage.height,
-                brightnessCompensation: currentLightParams.brightnessCompensation,
-                textureWeight: currentHeavyParams.textureWeight,
-                startY: startY,
-                endY: endY
-            });
-            startY += chunkHeight;
-        }
-        if (activeWorkers === 0 && mainImage.height > 0) {
-             statusText.textContent = 'エラー: Workerを起動できませんでした (chunk/tile size error)。';
-             generateButton.disabled = false;
-        }
+        isGeneratingF1F2 = false; // ★ F1/F2完了
     });
 
-    // --- 4. F2プレビュー描画 (Worker) ---
+    // --- 4. F1/F2ハイブリッドWorkerの呼び出し ---
     async function renderMosaicWithWorker(
         targetCanvas, 
-        results, 
-        lightParams
+        lightParams,
+        isRerender // ★ F1計算をスキップするか
     ) {
-        if (isGeneratingPreview) return; 
-        isGeneratingPreview = true;
-        generateButton.disabled = true; 
         
-        const t_f2_start = performance.now(); 
+        const t_f1f2_start = performance.now(); 
 
         try {
-            statusText.textContent = `ステータス: F2プレビューWorkerを起動中...`;
-            
-            // 1. F2 Bitmap準備
-            const t_f2_bitmap_start = performance.now();
+            // 1. F1/F2 Workerに必要なBitmapを準備
+            const t_f1f2_bitmap_start = performance.now();
             const mainImageBitmap = await createImageBitmap(mainImage);
             const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
             const thumbSheetBitmap = await createImageBitmap(thumbSheetImage);
-            const t_f2_bitmap_end = performance.now();
             
-            statusText.textContent = `ステータス: F2プレビュー描画中... (Worker実行中)`;
+            // ★ 修正: Fプランでは、F1計算用の元画像ImageDataも必要
+            ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+            ctx.drawImage(mainImage, 0, 0); 
+            const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
             
-            const previewWorker = new Worker('./preview_worker.js');
+            const t_f1f2_bitmap_end = performance.now();
             
-            // 2. F2 Worker実行
-            const t_f2_worker_start = performance.now();
+            statusText.textContent = `ステータス: F1/F2 Worker実行中...`;
+            
+            // ★ 修正: F1/F2ハイブリッドWorkerを起動
+            const hybridWorker = new Worker('./mosaic_worker.js');
+            workers.push(hybridWorker); // 実行中リストに追加
+            
+            // 2. F1/F2 Worker実行
+            const t_f1f2_worker_start = performance.now();
             const workerPromise = new Promise((resolve, reject) => {
-                previewWorker.onmessage = (e) => {
+                hybridWorker.onmessage = (e) => {
                     if (e.data.type === 'complete') {
                         const finalBitmap = e.data.bitmap;
                         const ctx = targetCanvas.getContext('2d');
@@ -639,38 +570,59 @@ document.addEventListener('DOMContentLoaded', async () => {
                         ctx.drawImage(finalBitmap, 0, 0);
                         finalBitmap.close(); 
                         
-                        // ★ 計測: F2完了ログ
-                        const t_f2_worker_end = performance.now();
+                        // ★ 計測: F1/F2完了ログ
+                        const t_f1f2_worker_end = performance.now();
                         if(timingLog) {
-                            timingLog.textContent += `\n[F2] Worker 描画 (合計): ${e.data.totalTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2-A (Tile Draw): ${e.data.tileTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2-B (Blend): ${e.data.blendTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n[F2] メインスレッド待機 (総時間): ${((t_f2_worker_end - t_f2_start)/1000.0).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2 (Bitmap準備): ${((t_f2_bitmap_end - t_f2_bitmap_start)/1000.0).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2 (Worker実行): ${((t_f2_worker_end - t_f2_worker_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n[F1] Worker 配置計算: ${e.data.f1Time.toFixed(3)} 秒`;
+                            timingLog.textContent += `\n[F2] Worker 描画 (合計): ${e.data.f2Time.toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2-A (Tile Draw): ${e.data.f2TileTime.toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2-B (Blend): ${e.data.f2BlendTime.toFixed(3)} 秒`;
+                            
+                            timingLog.textContent += `\n[F1/F2] メインスレッド待機 (総時間): ${((t_f1f2_worker_end - t_f1f2_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F1/F2 (Bitmap準備): ${((t_f1f2_bitmap_end - t_f1f2_bitmap_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F1/F2 (Worker実行): ${((t_f1f2_worker_end - t_f1f2_worker_start)/1000.0).toFixed(3)} 秒`;
                         }
                         
+                        cachedResults = true; // ★ 修正: F1計算が完了したことをフラグで示す
                         resolve();
+                        
+                    } else if (e.data.type === 'f1_chunk_complete') {
+                        // Fプランでは並列実行しないため、ここは無視される
+                        
+                    } else if (e.data.type === 'status') {
+                        statusText.textContent = `ステータス (F1/F2 Worker): ${e.data.message}`;
+                    } else if (e.data.type === 'progress') {
+                        if (progressBar) progressBar.style.width = `${e.data.progress * 100}%`;
                     } else if (e.data.type === 'error') {
                         reject(new Error(e.data.message));
                     }
-                    previewWorker.terminate();
                 };
-                previewWorker.onerror = (error) => {
-                    reject(new Error(`F2 Worker error: ${error.message}`));
-                    previewWorker.terminate();
+                hybridWorker.onerror = (error) => {
+                    reject(new Error(`F1/F2 Worker error: ${error.message}`));
                 };
                 
-                previewWorker.postMessage({
-                    tileData: tileData,
-                    cachedResults: results,
+                // ★ 修正: F1/F2ハイブリッドWorkerに全データを転送
+                const heavyParams = lastHeavyParams; // (F1再計算時はheavyParamsは更新済み)
+                
+                hybridWorker.postMessage({
+                    // F1用
+                    imageData: imageData, 
+                    tileData: tileData, 
+                    tileSize: parseInt(tileSizeInput.value),
+                    width: mainImage.width,
+                    height: mainImage.height,
+                    brightnessCompensation: lightParams.brightnessCompensation,
+                    textureWeight: parseFloat(textureWeightInput.value) / 100.0,
+                    startY: 0, // ★ Fプラン: 全範囲
+                    endY: mainImage.height, // ★ Fプラン: 全範囲
+                    
+                    // F2用
                     mainImageBitmap: mainImageBitmap,
                     edgeImageBitmap: edgeImageBitmap,
                     thumbSheetBitmap: thumbSheetBitmap,
-                    width: mainImage.width,
-                    height: mainImage.height,
                     lightParams: lightParams
-                }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), thumbSheetBitmap]); 
+                    
+                }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), thumbSheetBitmap, imageData.data.buffer]); 
             });
             
             await workerPromise; 
@@ -678,10 +630,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.textContent = 'ステータス: モザイクアートが完成しました！';
             
         } catch (err) {
-            statusText.textContent = `エラー: F2プレビュー描画に失敗しました。 ${err.message}`;
-            console.error("F2 Preview Worker failed:", err);
+            statusText.textContent = `エラー: F1/F2 Workerが失敗しました。 ${err.message}`;
+            console.error("F1/F2 Hybrid Worker failed:", err);
         } finally {
-            isGeneratingPreview = false;
+            terminateWorkers(); // F1/F2 Workerをクリア
+            isGeneratingF1F2 = false;
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
         }
@@ -692,16 +645,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
 
-        // ★★★ 修正点: F3ダウンロードを「予約」方式に変更 (Cプラン: メモリキャッシュ版) ★★★
-        downloadButton.addEventListener('click', () => { // ★ async を削除
+        // ★★★ 修正点: F3ダウンロード (Cプラン + Fプラン) ★★★
+        downloadButton.addEventListener('click', () => { 
             resetParameterStyles(allDownloadParams);
             
-            if (workers.length > 0 || isGeneratingPreview || isGeneratingFullRes) {
+            // ★ 修正: F1/F2実行中 または F3実行中 はブロック
+            if (isGeneratingF1F2 || isGeneratingFullRes) {
                 console.warn("[Button Click] 既に別の処理が実行中です。");
                 return;
             } 
+            // ★ 修正: F1が完了したか(cachedResultsフラグ)をチェック
             if (!cachedResults || !mainImage) {
-                 statusText.textContent = 'エラー: F1計算結果(cachedResults)が見つかりません。';
+                 statusText.textContent = 'エラー: F1計算がまだ完了していません。';
                  return;
             }
 
@@ -763,34 +718,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const mainImageBitmap = await createImageBitmap(mainImage);
                     const edgeImageBitmap = edgeCanvas ? await createImageBitmap(edgeCanvas) : null;
                     
-                    // 必要なシートリストを作成 (F1の結果に基づく)
-                    const requiredTileIds = new Set(cachedResults.map(result => result.tileId));
-                    const requiredSheetIndices = new Set();
-                    requiredTileIds.forEach(id => {
-                        const tileInfo = tileData.tiles[id];
-                        if (tileInfo) {
-                            requiredSheetIndices.add(tileInfo.fullCoords.sheetIndex);
-                        }
-                    });
+                    // ★ 修正: Fプランでは元画像ImageDataもF3に渡す
+                    ctx.clearRect(0, 0, mainImage.width, mainImage.height);
+                    ctx.drawImage(mainImage, 0, 0); 
+                    const imageData = ctx.getImageData(0, 0, mainImage.width, mainImage.height); 
                     
-                    // ★★★ 修正点: Cプラン (ハイブリッド) ★★★
+                    // ★ 修正: Cプラン (ハイブリッド)
                     // 必要なArrayBufferをf3SheetCacheから抽出し、ImageBitmapに変換
                     const bitmapsToSend = new Map();
-                    const transferList = [];
-                    let totalSendSize = 0;
+                    const transferList = [mainImageBitmap, imageData.data.buffer]; // ★ Fプラン: imageDataも転送
+                    if (edgeImageBitmap) transferList.push(edgeImageBitmap);
                     
+                    let totalSendSize = 0;
                     const bitmapCreationPromises = [];
                     
-                    for (const index of requiredSheetIndices) {
-                        const buffer = f3SheetCache.get(index);
+                    // ★ 修正: Fプランでは F1の結果が不明なため、「全シート」をBitmap変換して渡す
+                    for (const [index, buffer] of f3SheetCache.entries()) {
                         if (buffer) {
                             totalSendSize += buffer.byteLength;
-                            // ★ 修正: メインスレッドがBitmapに変換する
                             bitmapCreationPromises.push(
                                 createImageBitmap(new Blob([buffer]))
                                     .then(bitmap => {
                                         bitmapsToSend.set(index, bitmap);
-                                        transferList.push(bitmap); // 転送リストに追加
+                                        transferList.push(bitmap); 
                                     })
                             );
                         } else {
@@ -798,7 +748,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     }
                     
-                    // メインスレッドで全Bitmapの変換を待つ
                     await Promise.all(bitmapCreationPromises);
                     const t_f3_bitmap_end = performance.now();
                     
@@ -819,9 +768,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 // ★ 計測: F3完了ログ
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    // ★ 修正: F3-A1 は 削除
-                                    // timingLog.textContent += `\n  - F3-A1 (Load Cache): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
-                                    // timingLog.textContent += `\n  - F3-A1 (Retries/Fails): ${e.data.retryCount} 回 / ${e.data.failCount} 回`;
+                                    // ★ 修正: F3-A1 は (F1 再計算)
+                                    timingLog.textContent += `\n  - F3-A1 (F1 Re-Calc): ${e.data.loadTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-A2 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                                     
@@ -836,22 +784,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 reject(new Error(e.data.message));
                             }
                             downloadWorker.terminate();
-                            mainImageBitmap.close(); 
-                            if (edgeImageBitmap) edgeImageBitmap.close();
+                            // mainImageBitmap, edgeImageBitmap は転送済みなので close() しない
                         };
                         downloadWorker.onerror = (error) => {
                             reject(new Error(`Worker error: ${error.message}`));
                             downloadWorker.terminate();
-                            mainImageBitmap.close();
-                            if (edgeImageBitmap) edgeImageBitmap.close();
                         };
                         
-                        // ★ 修正: Cプラン (ImageBitmap Map) を転送
+                        // ★ 修正: Cプラン + Fプラン
                         downloadWorker.postMessage({
                             tileData: tileData, 
-                            cachedResults: cachedResults,
-                            // requiredSheetIndices: requiredSheetIndicesArray, // ★ Bプラン削除
+                            // cachedResults: cachedResults, // ★ Fプラン: 渡さない
                             sheetBitmaps: bitmapsToSend, // ★ Cプラン
+                            
+                            // ★ Fプラン: F1計算用のデータを渡す
+                            imageData: imageData,
+                            tileSize: parseInt(tileSizeInput.value),
+                            textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
                             mainImageBitmap: mainImageBitmap, 
                             edgeImageBitmap: edgeImageBitmap,
@@ -860,7 +809,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             lightParams: lightParams,
                             scale: f3_scale, 
                             quality: f3_quality
-                        }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), ...transferList]); // ★ ImageBitmapを転送
+                        }, transferList); // ★ ImageBitmapとImageDataバッファを転送
                     });
                     
                     const blob = await workerPromise;
