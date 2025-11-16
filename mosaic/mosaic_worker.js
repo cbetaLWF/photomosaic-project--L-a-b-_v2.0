@@ -1,30 +1,20 @@
-// mosaic_worker.js (Hプラン: tileData を fetch)
+// mosaic_worker.js (Hプラン: postMessage の競合フリーズ対策)
 
-// ★ 修正: tileData をWorker内でキャッシュする
 let tileDataCache = null;
 
-/**
- * tile_data.json を fetch し、キャッシュする
- */
 async function getTileData() {
     if (tileDataCache) {
         return tileDataCache;
     }
-    
-    // ★ 修正: 詳細ステータス報告 ★
     self.postMessage({ type: 'status', message: `tile_data.json を fetch 中...` });
-    
-    const response = await fetch('tile_data.json'); // Worker自身がfetch
+    const response = await fetch('tile_data.json'); 
     if (!response.ok) {
         throw new Error(`Worker Error: tile_data.json の fetch に失敗しました (${response.status})`);
     }
     tileDataCache = await response.json();
-    
-    // fetchしたデータを検証
     if (!tileDataCache || !tileDataCache.tiles || tileDataCache.tiles.length === 0) {
          throw new Error('Worker Error: fetch した tile_data.json が不正か空です。');
     }
-    
     self.postMessage({ type: 'status', message: `tile_data.json 読込完了。` });
     return tileDataCache;
 }
@@ -153,27 +143,29 @@ async function renderMosaicPreview(
 self.onmessage = async (e) => {
     
     try {
-        self.postMessage({ type: 'status', message: `起動。必須データを検証中...` });
+        self.postMessage({ type: 'status', message: `起動。データ(e.data)受信...` }); // ★ステータス修正
         
         const t_f1_start = performance.now();
         
-        // ★★★ 修正: tileData を e.data から削除 ★★★
+        // ★★★ 修正: imageBuffer を受け取る ★★★
         const { 
-            imageDataArray, /* tileData, */ tileSize, width, height, 
+            imageBuffer, /* imageDataArray, tileData, */ tileSize, width, height, 
             brightnessCompensation, textureWeight,
             startY, endY,
             mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams,
             isRerender
         } = e.data;
         
-        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
-        const tileData = await getTileData();
+        // ★★★ 修正: バッファから配列を再構築 ★★★
+        const imageDataArray = new Uint8ClampedArray(imageBuffer);
+
+        self.postMessage({ type: 'status', message: `必須データを検証中...` }); // ★ステータス修正
 
         // ( ... 事前検証 (Sanity Check) ... )
-        if (!imageDataArray) {
-            throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
+        if (!imageDataArray || imageDataArray.length === 0) { // ★修正
+            throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が空か、構築に失敗しました。");
         }
-        // (tileData は getTileData() 内で検証済み)
+        // (tileData は fetch するのでここでは検証しない)
         if (!mainImageBitmap) {
             throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
         }
@@ -186,6 +178,10 @@ self.onmessage = async (e) => {
         if (!tileSize || tileSize < 1 || isNaN(tileSize)) {
             throw new Error(`Worker Error: 不正なタイルサイズです: ${tileSize}。1以上の数値を入力してください。`);
         }
+        
+        // ★★★ 修正: tileData を Worker 内部で fetch ★★★
+        // (検証の後、F1計算の前に移動)
+        const tileData = await getTileData();
 
         self.postMessage({ type: 'status', message: `検証完了。F1計算ループを開始...` });
 
