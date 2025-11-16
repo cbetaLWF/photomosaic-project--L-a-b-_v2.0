@@ -1,4 +1,4 @@
-// main.js (Gプラン: IndexedDB オーケストレータ)
+// main.js (Hプラン: F3プリロード遅延実行)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
@@ -249,8 +249,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
             if (mainImageInput) mainImageInput.disabled = false;
             
-            // ★★★ 修正点: F2ロード完了と同時にF3プリロードを開始 ★★★
-            startF3Preload(tileData);
+            // ★★★ 修正点: Hプラン (F3プリロードはF2完了後に移動) ★★★
+            // startF3Preload(tileData);
         };
         thumbSheetImage.onerror = () => {
             statusText.textContent = `エラー: プレビュースプライトシート (${tileData.tileSets.thumb.sheetUrl}) のロードに失敗しました。`;
@@ -392,10 +392,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ★★★ 修正点: F3プリロード戦略 (Cプラン: メモリキャッシュ) ★★★
     function startF3Preload(tileData) {
         
+        // ★ Hプラン: プリロードが既に開始されていたら実行しない
+        if (preloadPromise) return;
+        
         const fullSet = tileData.tileSets.full;
         const urlsToPreload = fullSet.sheetUrls;
 
-        console.log(`[F3 Preload] F2ロード完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
+        console.log(`[F3 Preload] F2描画完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
         t_f3_preload_start = performance.now(); // ★ 計測: T1 (F3 Preload Start)
         f3SheetCache.clear(); // 古いキャッシュをクリア
@@ -661,6 +664,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             isGeneratingF2 = false;
             generateButton.disabled = false;
             if (downloadButton) downloadButton.style.display = 'block';
+            
+            // ★★★ 修正点: Hプラン ★★★
+            // F2描画が完了した（またはF1計算→F2描画が完了した）このタイミングで、
+            // F3プリロードを（まだ開始されていなければ）開始する
+            if (!preloadPromise) {
+                startF3Preload(tileData);
+            }
         }
     }
 
@@ -697,7 +707,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // 2. プリロードが開始されたかチェック
             if (!preloadPromise) {
-                 statusText.textContent = 'エラー: F3プリロードが開始されていません。';
+                 // Hプランでは、F2が完了していれば preloadPromise は存在するはず
+                 // (ただし、F2完了直後に押した場合、まだ開始していない可能性もゼロではない)
+                 statusText.textContent = 'エラー: F3プリロードがまだ開始されていません。F2の描画が完了してから再度お試しください。';
                  isGeneratingFullRes = false;
                  generateButton.disabled = false;
                  downloadButton.disabled = false;
