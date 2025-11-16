@@ -1,20 +1,16 @@
 // mosaic_worker.js (F1:計算 + F2:プレビュー描画 ハイブリッド)
 
-// ★★★ Hプラン修正: IndexedDBへの依存を削除 ★★★
-// importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js'); // 削除
+// ( ... L*a*b*ヘルパー関数群 ... )
+// ( ... renderMosaicPreview (F2描画) 関数 ... )
+// (上記2つは変更なし)
 
-
-// L*a*b*変換のための定数とヘルパー関数
 const REF_X = 95.047; // D65
 const REF_Y = 100.000;
 const REF_Z = 108.883;
-
 function f(t) {
     return t > 0.008856 ? Math.pow(t, 1/3) : (7.787 * t) + (16 / 116);
 }
-
 function rgbToLab(r, g, b) {
-    // ( ... rgbToLab関数の内容は変更なし ... )
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
@@ -27,13 +23,9 @@ function rgbToLab(r, g, b) {
     l = Math.max(0, Math.min(100, l));
     return { l: l, a: a, b_star: b_star };
 }
-
-// 平均RGBからL*値のみを返す簡易ヘルパー
 function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
-
-// ★★★ F2描画ロジック (変更なし) ★★★
 async function renderMosaicPreview(
     canvas, 
     tileData, 
@@ -45,38 +37,27 @@ async function renderMosaicPreview(
     lightParams
 ) {
     const t_render_start = performance.now(); 
-
     const canvasWidth = width;
     const canvasHeight = height;
-    
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, canvasWidth, canvasHeight); 
     ctx.clip(); 
-
     const MIN_TILE_L = 5.0; 
     const MAX_BRIGHTNESS_RATIO = 5.0; 
     const brightnessFactor = lightParams.brightnessCompensation / 100; 
-
     const thumbSet = tileData.tileSets.thumb;
     const thumbTileW = thumbSet.tileWidth;
     const thumbTileH = thumbSet.tileHeight;
-    
-    // ★ F2描画ループ
     for (const tileResult of results) {
-        
         const tileInfo = tileData.tiles[tileResult.tileId];
         if (!tileInfo) continue;
-        
         const pattern = tileInfo.patterns.find(p => p.type === tileResult.patternType);
         if (!pattern) continue;
-        
-        // 1. 明度補正
         let targetL = tileResult.targetL; 
         let tileL = pattern.l; 
         if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
@@ -86,28 +67,19 @@ async function renderMosaicPreview(
         }
         const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
         ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
-
-        // 2. 描画座標
         const dx = tileResult.x;
         const dy = tileResult.y;
         const dWidth = tileResult.width;
         const dHeight = tileResult.height; 
-        
-        // 3. ソース座標
         const coords = tileInfo.thumbCoords;
         const sourceSheet = thumbSheetBitmap; 
-        
-        // 4. クロップ計算
         const sSize = Math.min(thumbTileW, thumbTileH);
         const isHorizontal = thumbTileW > thumbTileH;
-        
         let sx = coords.x;
         let sy = coords.y;
-        
         const typeParts = tileResult.patternType.split('_'); 
         const cropType = typeParts[0]; 
         const flipType = typeParts[1]; 
-        
         if (isHorizontal) {
             if (cropType === "cropC") sx += Math.floor((thumbTileW - sSize) / 2);
             else if (cropType === "cropR") sx += (thumbTileW - sSize);
@@ -115,8 +87,6 @@ async function renderMosaicPreview(
             if (cropType === "cropM") sy += Math.floor((thumbTileH - sSize) / 2);
             else if (cropType === "cropB") sy += (thumbTileH - sSize);
         }
-
-        // 5. 描画実行
         ctx.save();
         if (flipType === "flip1") {
             ctx.scale(-1, 1);
@@ -127,11 +97,8 @@ async function renderMosaicPreview(
         ctx.restore();
         ctx.filter = 'none';
     }
-    
     const t_render_tile_end = performance.now();
     ctx.restore(); // クリッピングを解除
-
-    // 2段階ブレンド処理
     if (lightParams.blendOpacity > 0 && mainImageBitmap) {
         ctx.globalCompositeOperation = 'soft-light'; 
         ctx.globalAlpha = lightParams.blendOpacity / 100;
@@ -144,225 +111,239 @@ async function renderMosaicPreview(
     }
     ctx.globalCompositeOperation = 'source-over'; 
     ctx.globalAlpha = 1.0; 
-    
     const t_render_blend_end = performance.now();
-    
     return { 
         tileTime: t_render_tile_end - t_render_start,
         blendTime: t_render_blend_end - t_render_tile_end
     };
 }
-// ★★★ F2ロジック (変更なし) ★★★
 
 
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
     
-    const t_f1_start = performance.now();
-    
-    // ★★★ バグ修正: imageData を imageDataArray として受け取る ★★★
-    const { 
-        imageDataArray, tileData, tileSize, width, height, // ★ 修正 
-        brightnessCompensation, textureWeight,
-        startY, endY,
-        // F2描画用のデータ
-        mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams,
-        // ★★★ Hプラン修正: F2再描画フラグ (isRerender) を受け取るが、使用しない ★★★
-        isRerender
-    } = e.data;
-    
-    const tiles = tileData.tiles;
-    
-    // F1の計算結果 (cachedResults)
-    let results = []; 
-    let f1Time = 0;
-    
-    // ★★★ Hプラン修正: F1スキップロジックを削除 ★★★
-    // 常にF1計算を実行する
-    
-    // F1計算を通常実行
-    const ASPECT_RATIO = 1.0; 
-    const tileWidth = tileSize;
-    const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
-    
-    const usageCount = new Map(); 
-    const lastChoiceInRow = new Map();
+    // ★★★ 修正: 処理全体を try...catch で囲む ★★★
+    try {
+        const t_f1_start = performance.now();
+        
+        const { 
+            imageDataArray, tileData, tileSize, width, height, 
+            brightnessCompensation, textureWeight,
+            startY, endY,
+            mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams,
+            isRerender
+        } = e.data;
+        
+        // ★★★ 修正: 必須データの「事前検証」 (Sanity Check) ★★★
+        if (!imageDataArray) {
+            throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が main.js から渡されませんでした。");
+        }
+        if (!tileData) {
+            throw new Error("Worker Error: 'tileData' (JSON) が main.js から渡されませんでした。");
+        }
+        if (!mainImageBitmap) {
+            throw new Error("Worker Error: 'mainImageBitmap' (メイン画像) が main.js から渡されませんでした。");
+        }
+        if (!thumbSheetBitmap) {
+            throw new Error("Worker Error: 'thumbSheetBitmap' (スプライトシート) が main.js から渡されませんでした。");
+        }
+        if (!lightParams) {
+            throw new Error("Worker Error: 'lightParams' (描画パラメータ) が main.js から渡されませんでした。");
+        }
 
-    const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
-    let processedRows = 0;
+        const tiles = tileData.tiles;
+        
+        let results = []; 
+        let f1Time = 0;
+        
+        // (F1スキップロジックは Hプランで削除済み)
+        
+        // F1計算を通常実行
+        const ASPECT_RATIO = 1.0; 
+        const tileWidth = tileSize;
+        const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
+        
+        const usageCount = new Map(); 
+        const lastChoiceInRow = new Map();
 
-    // --- F1: メインループ (計算) ---
-    for (let y = startY; y < endY; y += tileHeight) {
-        for (let x = 0; x < width; x += tileWidth) {
-            
-            const neighborLeft = lastChoiceInRow.get(y); 
-            const currentBlockWidth = Math.min(tileWidth, width - x);
-            const currentBlockHeight = Math.min(tileHeight, height - y);
-            
-            const thumbW = tileData.tileSets.thumb.tileWidth;
-            const thumbH = tileData.tileSets.thumb.tileHeight;
-            const sSize = Math.min(thumbW, thumbH);
-            
-            // ( ... 3x3 L*ベクトル計算 (変更なし) ... )
-            const oneThirdX = x + Math.floor(currentBlockWidth / 3); 
-            const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
-            const oneThirdY = y + Math.floor(currentBlockHeight / 3);
-            const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
-            
-            const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
-            let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
-            let pixelCountTotal = 0;
-            
-            for (let py = y; py < y + currentBlockHeight; py++) {
-                const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
-                for (let px = x; px < x + currentBlockWidth; px++) {
-                    const i = (py * width + px) * 4;
-                    
-                    // ★★★ バグ修正: imageData.data[i] ではなく imageDataArray[i] を参照 ★★★
-                    const r = imageDataArray[i]; 
-                    const g = imageDataArray[i + 1]; 
-                    const b = imageDataArray[i + 2];
-                    
-                    r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
-                    const col = (px < oneThirdX) ? 0 : (px < twoThirdsX ? 1 : 2);
-                    const gridIndex = row * 3 + col;
-                    sums[gridIndex].r += r; sums[gridIndex].g += g; sums[gridIndex].b += b; sums[gridIndex].count++;
+        const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
+        let processedRows = 0;
+
+        // --- F1: メインループ (計算) ---
+        for (let y = startY; y < endY; y += tileHeight) {
+            for (let x = 0; x < width; x += tileWidth) {
+                
+                const neighborLeft = lastChoiceInRow.get(y); 
+                const currentBlockWidth = Math.min(tileWidth, width - x);
+                const currentBlockHeight = Math.min(tileHeight, height - y);
+                
+                const thumbW = tileData.tileSets.thumb.tileWidth;
+                const thumbH = tileData.tileSets.thumb.tileHeight;
+                const sSize = Math.min(thumbW, thumbH);
+                
+                const oneThirdX = x + Math.floor(currentBlockWidth / 3); 
+                const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
+                const oneThirdY = y + Math.floor(currentBlockHeight / 3);
+                const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
+                
+                const sums = Array(9).fill(null).map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+                let r_sum_total = 0, g_sum_total = 0, b_sum_total = 0;
+                let pixelCountTotal = 0;
+                
+                for (let py = y; py < y + currentBlockHeight; py++) {
+                    const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
+                    for (let px = x; px < x + currentBlockWidth; px++) {
+                        const i = (py * width + px) * 4;
+                        
+                        const r = imageDataArray[i]; 
+                        const g = imageDataArray[i + 1]; 
+                        const b = imageDataArray[i + 2];
+                        
+                        r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
+                        const col = (px < oneThirdX) ? 0 : (px < twoThirdsX ? 1 : 2);
+                        const gridIndex = row * 3 + col;
+                        sums[gridIndex].r += r; sums[gridIndex].g += g; sums[gridIndex].b += b; sums[gridIndex].count++;
+                    }
                 }
-            }
-            if (pixelCountTotal === 0) continue;
-            
-            const r_avg_total = r_sum_total / pixelCountTotal;
-            const g_avg_total = g_sum_total / pixelCountTotal;
-            const b_avg_total = b_sum_total / pixelCountTotal;
-            const targetLab = rgbToLab(r_avg_total, g_avg_total, b_avg_total);
-            const target_l_vector = sums.map(s => {
-                if (s.count === 0) return 0;
-                return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
-            });
-            
-            // ( ... 最適なタイルを検索するループ (変更なし) ... )
-            let bestMatchPattern = null;
-            let bestMatchTileId = -1; 
-            let minDistance = Infinity;
-            
-            const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
-            const LOW_CHROMA_THRESHOLD = 25.0; 
-            const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
-            const DEFAULT_CHROMA_PENALTY_FACTOR = 0.5; 
-            const TEXTURE_SCALE_FACTOR = 0.5;
-            const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
-            
-            for (const tile of tiles) {
-                for (const pattern of tile.patterns) {
-                    // ( ... 色距離(colorDistance)の計算 ... )
-                    const dL = targetLab.l - pattern.l;
-                    const dA = targetLab.a - pattern.a;
-                    const dB = targetLab.b_star - pattern.b_star;
-                    let baseColorDistance = Math.sqrt((L_WEIGHT * dL * dL) + (AB_WEIGHT * dA * dA) + (AB_WEIGHT * dB * dB));
-                    const tileChroma = Math.sqrt(pattern.a * pattern.a + pattern.b_star * pattern.b_star);
-                    const chromaDifference = Math.abs(targetChroma - tileChroma);
-                    const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD) ? HIGH_CHROMA_PENALTY_FACTOR : DEFAULT_CHROMA_PENALTY_FACTOR;
-                    const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
-                    const colorDistance = baseColorDistance + chromaPenalty;
-                    // ( ... 3x3 L*ベクトル距離(textureDistance)の計算 ... )
-                    let textureDistanceSquared = 0;
-                    for (let k = 0; k < 9; k++) {
-                        const diff = target_l_vector[k] - pattern.l_vector[k];
-                        textureDistanceSquared += diff * diff;
-                    }
-                    const textureDistance = Math.sqrt(textureDistanceSquared);
-                    // ( ... L距離(totalDistance)の計算 ... )
-                    let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
-                    // ( ... 公平性ペナルティ ... )
-                    const patternKey = pattern.l_vector.toString(); 
-                    const count = usageCount.get(patternKey) || 0; 
-                    const fairnessPenalty = count * 0.5; 
-                    totalDistance += fairnessPenalty; 
-                    // ( ... 隣接ペナルティ ... )
-                    if (neighborLeft && tile.id === neighborLeft.tileId) {
-                        const currentType = pattern.type;
-                        const neighborType = neighborLeft.type;
-                        const currentParts = currentType.split('_');
-                        const neighborParts = neighborType.split('_');
-                        if (currentParts.length === 2 && neighborParts.length === 2) {
-                            const currentCrop = currentParts[0];
-                            const currentFlip = currentParts[1];
-                            const neighborCrop = neighborParts[0];
-                            const neighborFlip = neighborParts[1];
-                            if (currentCrop === neighborCrop && currentFlip !== neighborFlip) {
-                                totalDistance += 100000.0;
-                            }
-                        }
-                    }
-                    
-                    if (totalDistance < minDistance) {
-                        minDistance = totalDistance;
-                        bestMatchPattern = pattern; 
-                        bestMatchTileId = tile.id; 
-                    }
-                } 
-            } 
-
-            // ( ... 結果を格納 (変更なし) ... )
-            if (bestMatchPattern) {
-                results.push({
-                    tileId: bestMatchTileId,            
-                    patternType: bestMatchPattern.type, 
-                    x: x, y: y,
-                    width: tileWidth,     
-                    height: tileHeight,    
-                    targetL: targetLab.l, 
-                    tileL: bestMatchPattern.l
+                if (pixelCountTotal === 0) continue;
+                
+                const r_avg_total = r_sum_total / pixelCountTotal;
+                const g_avg_total = g_sum_total / pixelCountTotal;
+                const b_avg_total = b_sum_total / pixelCountTotal;
+                const targetLab = rgbToLab(r_avg_total, g_avg_total, b_avg_total);
+                const target_l_vector = sums.map(s => {
+                    if (s.count === 0) return 0;
+                    return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
                 });
                 
-                usageCount.set(bestMatchPattern.l_vector.toString(), (usageCount.get(bestMatchPattern.l_vector.toString()) || 0) + 1);
-                lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
-            }
-        } // xループの終わり
+                // ( ... 最適なタイルを検索するループ (変更なし) ... )
+                let bestMatchPattern = null;
+                let bestMatchTileId = -1; 
+                let minDistance = Infinity;
+                const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
+                const LOW_CHROMA_THRESHOLD = 25.0; 
+                const HIGH_CHROMA_PENALTY_FACTOR = 10.0; 
+                const DEFAULT_CHROMA_PENALTY_FACTOR = 0.5; 
+                const TEXTURE_SCALE_FACTOR = 0.5;
+                const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
+                for (const tile of tiles) {
+                    for (const pattern of tile.patterns) {
+                        const dL = targetLab.l - pattern.l;
+                        const dA = targetLab.a - pattern.a;
+                        const dB = targetLab.b_star - pattern.b_star;
+                        let baseColorDistance = Math.sqrt((L_WEIGHT * dL * dL) + (AB_WEIGHT * dA * dA) + (AB_WEIGHT * dB * dB));
+                        const tileChroma = Math.sqrt(pattern.a * pattern.a + pattern.b_star * pattern.b_star);
+                        const chromaDifference = Math.abs(targetChroma - tileChroma);
+                        const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD) ? HIGH_CHROMA_PENALTY_FACTOR : DEFAULT_CHROMA_PENALTY_FACTOR;
+                        const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
+                        const colorDistance = baseColorDistance + chromaPenalty;
+                        let textureDistanceSquared = 0;
+                        for (let k = 0; k < 9; k++) {
+                            const diff = target_l_vector[k] - pattern.l_vector[k];
+                            textureDistanceSquared += diff * diff;
+                        }
+                        const textureDistance = Math.sqrt(textureDistanceSquared);
+                        let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
+                        const patternKey = pattern.l_vector.toString(); 
+                        const count = usageCount.get(patternKey) || 0; 
+                        const fairnessPenalty = count * 0.5; 
+                        totalDistance += fairnessPenalty; 
+                        if (neighborLeft && tile.id === neighborLeft.tileId) {
+                            const currentType = pattern.type;
+                            const neighborType = neighborLeft.type;
+                            const currentParts = currentType.split('_');
+                            const neighborParts = neighborType.split('_');
+                            if (currentParts.length === 2 && neighborParts.length === 2) {
+                                const currentCrop = currentParts[0];
+                                const currentFlip = currentParts[1];
+                                const neighborCrop = neighborParts[0];
+                                const neighborFlip = neighborParts[1];
+                                if (currentCrop === neighborCrop && currentFlip !== neighborFlip) {
+                                    totalDistance += 100000.0;
+                                }
+                            }
+                        }
+                        if (totalDistance < minDistance) {
+                            minDistance = totalDistance;
+                            bestMatchPattern = pattern; 
+                            bestMatchTileId = tile.id; 
+                        }
+                    } 
+                } 
+                if (bestMatchPattern) {
+                    results.push({
+                        tileId: bestMatchTileId,            
+                        patternType: bestMatchPattern.type, 
+                        x: x, y: y,
+                        width: tileWidth,     
+                        height: tileHeight,    
+                        targetL: targetLab.l, 
+                        tileL: bestMatchPattern.l
+                    });
+                    usageCount.set(bestMatchPattern.l_vector.toString(), (usageCount.get(bestMatchPattern.l_vector.toString()) || 0) + 1);
+                    lastChoiceInRow.set(y, { tileId: bestMatchTileId, type: bestMatchPattern.type });
+                }
+            } // xループの終わり
+            processedRows++;
+            self.postMessage({ type: 'progress', progress: processedRows / totalRowsInChunk });
+        } // yループの終わり
+        
+        const t_f1_end = performance.now();
+        f1Time = (t_f1_end - t_f1_start) / 1000.0;
+        
+        // (IndexedDB保存ロジックは Hプランで削除済み)
+        
+        // ★ F2描画を開始
+        self.postMessage({ type: 'status', message: `F2プレビュー描画中...` });
+        
+        const t_f2_start = performance.now();
+        const previewCanvas = new OffscreenCanvas(width, height);
 
-        processedRows++;
-        self.postMessage({ type: 'progress', progress: processedRows / totalRowsInChunk });
+        // F2描画処理を実行
+        const { tileTime, blendTime } = await renderMosaicPreview(
+            previewCanvas, tileData, results,
+            mainImageBitmap, edgeImageBitmap, 
+            thumbSheetBitmap,
+            width, height, lightParams
+        );
+        
+        const finalBitmap = previewCanvas.transferToImageBitmap();
+        const t_f2_end = performance.now();
+        
+        const f2Time = (t_f2_end - t_f2_start) / 1000.0;
 
-    } // yループの終わり
-    
-    const t_f1_end = performance.now();
-    f1Time = (t_f1_end - t_f1_start) / 1000.0;
-    
-    // ★★★ Hプラン修正: F1完了時のIndexedDB保存ロジックを削除 ★★★
-    
-    
-    // ★ F2描画を開始
-    self.postMessage({ type: 'status', message: `F2プレビュー描画中...` });
-    
-    const t_f2_start = performance.now();
-    const previewCanvas = new OffscreenCanvas(width, height);
+        // メインスレッドに結果を返送
+        self.postMessage({ 
+            type: 'complete', 
+            bitmap: finalBitmap,
+            f1Time: f1Time,
+            f2Time: f2Time,
+            f2TileTime: tileTime / 1000.0,
+            f2BlendTime: blendTime / 1000.0,
+            f1Skipped: isRerender,
+            drawTiles: results.length,
+            jsonSizeKB: (JSON.stringify(results).length / 1024)
+        }, [finalBitmap]);
 
-    // F2描画処理を実行
-    const { tileTime, blendTime } = await renderMosaicPreview(
-        previewCanvas, tileData, results, // results = F1の計算結果
-        mainImageBitmap, edgeImageBitmap, 
-        thumbSheetBitmap,
-        width, height, lightParams
-    );
-    
-    // F2のImageBitmapに変換
-    const finalBitmap = previewCanvas.transferToImageBitmap();
-    const t_f2_end = performance.now();
-    
-    // F1/F2の合計時間を計算
-    const f2Time = (t_f2_end - t_f2_start) / 1000.0;
+    // ★★★ 修正: catch ブロックを追加 ★★★
+    } catch (error) {
+        // クラッシュした場合、メインスレッドに詳細なエラーを報告する
+        let detailedMessage = `F1/F2 Worker CRASH: ${error.message}\n`;
+        if (error.stack) {
+            detailedMessage += `Stack: ${error.stack}`;
+        }
+        
+        // 過去のバグに基づき、具体的なヒントを追加
+        if (error.message.includes("Cannot read properties of null") || error.message.includes("undefined")) {
+            detailedMessage += "\nHint: 'imageDataArray' または 'tileData' が null または undefined のまま使用されようとしました。";
+        }
+        if (error.name === 'ReferenceError') {
+            detailedMessage += "\nHint: 'idbKeyval' のような未定義の変数や関数が呼び出されました。";
+        }
 
-    // メインスレッドに結果を返送
-    self.postMessage({ 
-        type: 'complete', 
-        bitmap: finalBitmap,
-        f1Time: f1Time, // ★ Hプランでは常にF1が実行される
-        f2Time: f2Time,
-        f2TileTime: tileTime / 1000.0,
-        f2BlendTime: blendTime / 1000.0,
-        // ★ ログ用: Hプランでは常に isRerender は false (として扱う)
-        f1Skipped: isRerender, // (main.js側で判定するため値はそのまま渡す)
-        drawTiles: results.length,
-        jsonSizeKB: (JSON.stringify(results).length / 1024) // 概算
-    }, [finalBitmap]); // ImageBitmapを転送
+        self.postMessage({ 
+            type: 'error', 
+            message: detailedMessage 
+        });
+    }
 };
