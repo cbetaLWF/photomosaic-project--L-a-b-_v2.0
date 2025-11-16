@@ -1,5 +1,5 @@
 // download_worker.js
-// Hプラン: postMessage の競合フリーズ対策
+// Hプラン: 1行ずつプロパティにアクセスしてフリーズ箇所を特定
 
 let tileDataCache = null;
 
@@ -284,7 +284,6 @@ self.onmessage = async (e) => {
         self.postMessage({ type: 'status', message: `F3 e.data.tileSize にアクセス中...` });
         const tileSize = e.data.tileSize;
         
-        // (他のシンプルなプロパティも同様に取得)
         self.postMessage({ type: 'status', message: `F3 e.data.width にアクセス中...` });
         const width = e.data.width;
         const height = e.data.height;
@@ -297,12 +296,11 @@ self.onmessage = async (e) => {
         // ★★★ 修正ここまで ★★★
 
 
-        // ★★★ 修正: バッファから配列を再構築 ★★★
         const imageDataArray = new Uint8ClampedArray(imageBuffer);
 
         self.postMessage({ type: 'status', message: `F3 Worker 必須データを検証中...` });
 
-        // ★★★ 修正: 必須データの「事前検証」 (Sanity Check) ★★★
+        // ( ... 事前検証 (Sanity Check) ... )
         if (!imageDataArray || imageDataArray.length === 0) {
             throw new Error("Worker Error: 'imageDataArray' (ピクセル配列) が空か、構築に失敗しました。");
         }
