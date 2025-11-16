@@ -1,4 +1,4 @@
-// main.js (Hプラン: 競合フリーズ対策 - バッファのコピーを実行)
+// main.js (Hプラン: 競合フリーズ対策 - 全オブジェクトをクローン)
 
 // ( ... ヘルパー関数 (applySobelFilter, etc) は変更なし ... )
 function applySobelFilter(imageData) {
@@ -450,6 +450,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const thumbSheetBitmap = await createImageBitmap(thumbSheetImage);
             
             let imageData = null;
+            // ★★★ 修正: 競合フリーズ対策 - transferList を初期化 ★★★
             let transferList = [mainImageBitmap, thumbSheetBitmap];
             if (edgeImageBitmap) transferList.push(edgeImageBitmap);
 
@@ -458,7 +459,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             mainCtx.drawImage(mainImage, 0, 0); 
             imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
             
-            // ★★★ 修正: 競合フリーズ対策 ★★★
+            // ★★★ 修正: 競合フリーズ対策 - imageBuffer を transferList に追加しない ★★★
             // transferList.push(imageData.data.buffer); // <-- 削除 (コピーさせる)
             
             const t_f1f2_bitmap_end = performance.now();
@@ -505,7 +506,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     terminateWorkers(); 
                 };
                 
-                // ★★★ 修正: imageBuffer を送る (transferListはバッファなし) ★★★
+                // ★★★ 修正: 第2引数 (transferList) を削除 ★★★
                 hybridWorker.postMessage({
                     // F1用
                     imageBuffer: imageData.data.buffer, 
@@ -525,7 +526,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     
                     isRerender: isRerender
                     
-                }, transferList); // ★ 修正: transferList には Bitmap のみ含まれる
+                }); // <-- transferList を削除
             });
             
             await workerPromise; 
@@ -616,8 +617,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const imageData = mainCtx.getImageData(0, 0, mainImage.width, mainImage.height); 
                     
                     const bitmapsToSend = new Map();
-                    // ★★★ 修正: 競合フリーズ対策 ★★★
-                    let transferList = [mainImageBitmap]; // <-- imageData.data.buffer を削除
+                    // ★★★ 修正: 競合フリーズ対策 - transferList を初期化 ★★★
+                    let transferList = [mainImageBitmap]; 
                     if (edgeImageBitmap) transferList.push(edgeImageBitmap);
                     
                     let totalSendSize = 0;
@@ -630,7 +631,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 createImageBitmap(new Blob([buffer]))
                                     .then(bitmap => {
                                         bitmapsToSend.set(index, bitmap);
-                                        transferList.push(bitmap); 
+                                        transferList.push(bitmap); // ★ Bitmapの転送はOK
                                     })
                             );
                         } else {
@@ -674,11 +675,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                             terminateWorkers(); 
                         };
                         
-                        // ★★★ 修正: imageBuffer を送る (transferListはバッファなし) ★★★
+                        // ★★★ 修正: 第2引数 (transferList) をBitmapのみに限定 ★★★
                         downloadWorker.postMessage({
                             sheetBitmaps: bitmapsToSend, 
                             
-                            imageBuffer: imageData.data.buffer, // ★ 修正
+                            imageBuffer: imageData.data.buffer, // ★ imageBufferはコピー
                             tileSize: tileSize,
                             textureWeight: parseFloat(textureWeightInput.value) / 100.0,
                             
