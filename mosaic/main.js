@@ -140,7 +140,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const progressBar = document.getElementById('progress-fill');
     const statusText = document.getElementById('status-text');
     const tileSizeInput = document.getElementById('tile-size');
-    // ( ... 他のUI要素 ... )
     const blendRangeInput = document.getElementById('blend-range');
     const edgeOpacityInput = document.getElementById('edge-opacity-range');
     const brightnessCompensationInput = document.getElementById('brightness-compensation');
@@ -165,7 +164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const resolutionScaleInput = document.getElementById('resolution-scale');
     const jpegQualityInput = document.getElementById('jpeg-quality');
     
-    const timingLog = document.getElementById('timing-log'); // ★ null の可能性がある
+    const timingLog = document.getElementById('timing-log');
 
     
     // ( ... 必須要素チェック (null許容) ... )
@@ -177,10 +176,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // ★★★ 修正点: 全工程の時間計測のための基準点 ★★★
     const t_app_start = performance.now();
+    let t_f3_preload_start = 0;
+    let t_f1_click = 0;
+    let t_f3_click = 0;
     
-    // ★ 修正: 環境ログ (nullチェック済み)
+    // ( ... 環境ログ (nullチェック済み) ... )
     if (timingLog) {
-        timingLog.textContent = ''; // ログをクリア
+        timingLog.textContent = ''; 
         const cpuCores = navigator.hardwareConcurrency || 'N/A';
         const deviceRam = navigator.deviceMemory || 'N/A';
         timingLog.innerHTML = `[環境] CPUコア: ${cpuCores}, RAM: ${deviceRam} GB`;
@@ -189,7 +191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ctx = mainCanvas.getContext('2d');
     let tileData = null; 
     let mainImage = null; 
-    let workers = []; // F1 (計算) Worker用
+    let workers = []; 
     let edgeCanvas = null; 
     let currentRecommendations = null;
     let cachedResults = null; 
@@ -198,8 +200,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     let lastGeneratedBlob = null; 
     let thumbSheetImage = null; 
     let isGeneratingPreview = false;
-    
-    // ★ 修正: F3プリロード用のPromiseをグローバルに保持
     let preloadPromise = null; 
 
 
@@ -224,7 +224,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         tileData = await response.json();
         const t_json_load_end = performance.now();
-        if(timingLog) timingLog.textContent += `\n[INIT] tile_data.json ロード: ${(t_json_load_end - t_json_load_start).toFixed(3)} 秒`;
+        if(timingLog) timingLog.textContent += `\n[INIT] tile_data.json ロード: ${((t_json_load_end - t_json_load_start)/1000.0).toFixed(3)} 秒`;
         
         if (!tileData || !tileData.tileSets || !tileData.tileSets.thumb || !tileData.tiles || tileData.tiles.length === 0) {
              throw new Error('tile_data.jsonがスプライトシート形式ではありません。Analyzer Appで新しいデータを再生成してください。');
@@ -238,7 +238,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // ★ 修正: F2ロード完了時に、F3プリロードを開始する
         thumbSheetImage.onload = () => {
             const t_f2_load_end = performance.now();
-            if(timingLog) timingLog.textContent += `\n[INIT] F2スプライトシート ロード: ${(t_f2_load_end - t_f2_load_start).toFixed(3)} 秒`;
+            if(timingLog) timingLog.textContent += `\n[INIT] F2スプライトシート ロード: ${((t_f2_load_end - t_f2_load_start)/1000.0).toFixed(3)} 秒`;
 
             statusText.textContent = `ステータス: プレビュー準備完了 (${tileData.tiles.length}タイル)。メイン画像を選択してください。`;
             if (mainImageInput) mainImageInput.disabled = false;
@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return; 
     }
     
-    // ( ... 2. メイン画像アップロード (推奨値/線画計算) (変更なし) ... )
+    // --- 2. メイン画像アップロード (推奨値/線画計算) ---
     if (mainImageInput) {
         mainImageInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -290,7 +290,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                     if (recommendationArea && applyRecommendationsButton) {
                         try {
-                            // ( ... 推奨値計算 (変更なし) ... )
                             const analysisSize = 400; 
                             const ratio = analysisSize / Math.max(mainImage.width, mainImage.height);
                             const w = mainImage.width * ratio;
@@ -309,7 +308,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                             edgeCanvas = new OffscreenCanvas(mainImage.width, mainImage.height);
                             edgeCanvas.getContext('2d').putImageData(fullEdgeResult.finalEdgeImageData, 0, 0);
                             
-                            // ( ... 推奨値をUIに適用 (変更なし) ... )
                             if (recTileSize) recTileSize.textContent = recommendations.tileSize;
                             if (recBrightness) recBrightness.textContent = recommendations.brightnessCompensation;
                             if (recTextureWeight) recTextureWeight.textContent = recommendations.textureWeight;
@@ -319,7 +317,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             statusText.textContent = `ステータス: 推奨値を表示しました。適用ボタンを押すか、手動で設定してください。`;
                             
                             const t_img_load_end = performance.now();
-                            if(timingLog) timingLog.textContent += `\n[IMG] 画像ロード+線画計算: ${(t_img_load_end - t_img_load_start).toFixed(3)} 秒`;
+                            if(timingLog) timingLog.textContent += `\n[IMG] 画像ロード+線画計算: ${((t_img_load_end - t_img_load_start)/1000.0).toFixed(3)} 秒`;
 
                         } catch (err) {
                             console.error("Recommendation analysis failed:", err);
@@ -394,7 +392,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         console.log(`[F3 Preload] F2ロード完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
-        const t_f3_preload_start = performance.now();
+        t_f3_preload_start = performance.now(); // ★ 計測: T1 (F3 Preload Start)
         
         // 3. プリロード (fetch) を実行
         const MAX_PRELOAD_CONCURRENCY = 10;
@@ -420,7 +418,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // ★ 修正: プリロード完了時にもログを出す
         preloadPromise.then(() => {
             const t_f3_preload_end = performance.now();
-            if(timingLog) timingLog.textContent += `\n[F3 Preload] F3全シートのバックグラウンドロード完了: ${(t_f3_preload_end - t_f3_preload_start).toFixed(3)} 秒`;
+            if(timingLog) timingLog.textContent += `\n[F3 Preload] F3全シートのバックグラウンドロード完了: ${((t_f3_preload_end - t_f3_preload_start)/1000.0).toFixed(3)} 秒`;
         });
     }
 
@@ -441,6 +439,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
         
+        // ★ 計測: T2 (F1 Click)
+        t_f1_click = performance.now();
+        
         // ★ 修正: ログをリセット（環境ログは保持）
         if (timingLog) {
             const envLog = timingLog.innerHTML.split('\n')[0]; 
@@ -449,16 +450,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const currentHeavyParams = {
             src: mainImage.src,
-            tileSize: parseInt(tileSizeInput ? tileSizeInput.value : 20), 
-            textureWeight: parseFloat(textureWeightInput ? textureWeightInput.value : 50) / 100.0 
+            tileSize: parseInt(tileSizeInput.value), 
+            textureWeight: parseFloat(textureWeightInput.value) / 100.0 
         };
         const currentLightParams = {
-            blendOpacity: parseInt(blendRangeInput ? blendRangeInput.value : 30),
-            edgeOpacity: parseInt(edgeOpacityInput ? edgeOpacityInput.value : 30),
-            brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
+            blendOpacity: parseInt(blendRangeInput.value),
+            edgeOpacity: parseInt(edgeOpacityInput.value),
+            brightnessCompensation: parseInt(brightnessCompensationInput.value)
         };
         
         const isTileSizeChanged = lastHeavyParams.tileSize !== currentHeavyParams.tileSize;
+        
+        // ★★★ 計測: F1/F2の入力パラメータをログ出力 ★★★
+        if (timingLog) {
+            timingLog.textContent += `\n--- [F1/F2 PARAMS] ---`;
+            timingLog.textContent += `\n  - Image Size: ${mainImage.width}x${mainImage.height}`;
+            timingLog.textContent += `\n  - Tile Size: ${currentHeavyParams.tileSize}`;
+            timingLog.textContent += `\n  - Texture Weight: ${currentHeavyParams.textureWeight}`;
+            timingLog.textContent += `\n  - Blend Opacity: ${currentLightParams.blendOpacity}`;
+            timingLog.textContent += `\n  - Edge Opacity: ${currentLightParams.edgeOpacity}`;
+            timingLog.textContent += `\n  - Brightness Comp: ${currentLightParams.brightnessCompensation}`;
+            timingLog.textContent += `\n-----------------------`;
+        }
         
         // 3. キャッシュのチェック
         if (!isTileSizeChanged && cachedResults && JSON.stringify(lastHeavyParams) === JSON.stringify(currentHeavyParams)) {
@@ -466,7 +479,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             // --- Case 1: 高速再描画 (F1スキップ) ---
             statusText.textContent = 'ステータス: 描画パラメータのみ変更... 高速に再描画します。';
             
-            // ★ 修正: F2 Workerを呼び出す
+            // ★ 計測: F2負荷（キャッシュ使用時）
+            if (timingLog) {
+                 timingLog.textContent += `\n[F1] (キャッシュ使用)`;
+                 timingLog.textContent += `\n[LOAD] Draw Tiles: ${cachedResults.length} 個`;
+                 try {
+                    timingLog.textContent += `\n[LOAD] JSON Size (approx): ${(JSON.stringify(cachedResults).length / 1024).toFixed(0)} KB`;
+                 } catch (e) { /* (JSON.stringifyが巨大すぎると失敗する可能性) */ }
+            }
+            
             await renderMosaicWithWorker(
                 mainCanvas,
                 cachedResults,
@@ -478,9 +499,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // --- Case 2: 通常処理 (F1 Worker処理を実行) ---
         cachedResults = null; 
-        // ★ 修正: F1再計算時はプリロードPromiseをリセットしない
-        // (F1実行前に全ロードを開始しているので、F1の結果に関わらず全シートがロードされる前提)
-        // preloadPromise = null; 
         lastHeavyParams = currentHeavyParams; 
         statusText.textContent = 'ステータス: タイル配置を計算中...';
         
@@ -527,13 +545,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (finishedWorkers === activeWorkers) {
                         // --- F1 (計算) 完了 ---
                         const t_f1_end = performance.now();
+                        cachedResults = allResults; 
                         
-                        if(timingLog) timingLog.textContent += `\n[F1] Worker 配置計算: ${(t_f1_end - t_f1_start).toFixed(3)} 秒 (タイル総数: ${tileData.tiles.length})`;
+                        // ★ 計測: F1完了ログ＋F2負荷
+                        if(timingLog) {
+                            timingLog.textContent += `\n[F1] Worker 配置計算: ${((t_f1_end - t_f1_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n[LOAD] Draw Tiles: ${cachedResults.length} 個`;
+                            try {
+                                timingLog.textContent += `\n[LOAD] JSON Size (approx): ${(JSON.stringify(cachedResults).length / 1024).toFixed(0)} KB`;
+                            } catch (e) { /* (JSON.stringifyが巨大すぎると失敗する可能性) */ }
+                        }
 
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。F2プレビュー描画中...';
                         if (progressBar) progressBar.style.width = '100%';
-                        
-                        cachedResults = allResults; 
                         
                         // ★ 修正: F1完了後、F2 Workerを呼び出す
                         await renderMosaicWithWorker(
@@ -541,9 +565,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                             cachedResults, 
                             currentLightParams
                         );
-                        
-                        // ★ 修正: F1完了後のプリロード呼び出しは削除
-                        // startF3Preload(tileData, cachedResults);
                         
                         terminateWorkers(); // F1 Workerを解放
                     }
@@ -577,7 +598,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 4. F2プレビュー描画 (Worker) ---
-    
     async function renderMosaicWithWorker(
         targetCanvas, 
         results, 
@@ -615,15 +635,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                         ctx.drawImage(finalBitmap, 0, 0);
                         finalBitmap.close(); 
                         
-                        // F2メトリクスをログに追加
+                        // ★ 計測: F2完了ログ
                         const t_f2_worker_end = performance.now();
                         if(timingLog) {
                             timingLog.textContent += `\n[F2] Worker 描画 (合計): ${e.data.totalTime.toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F2-A (Tile Draw): ${e.data.tileTime.toFixed(3)} 秒`;
                             timingLog.textContent += `\n  - F2-B (Blend): ${e.data.blendTime.toFixed(3)} 秒`;
-                            timingLog.textContent += `\n[F2] メインスレッド待機 (総時間): ${(t_f2_worker_end - t_f2_start).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2 (Bitmap準備): ${(t_f2_bitmap_end - t_f2_bitmap_start).toFixed(3)} 秒`;
-                            timingLog.textContent += `\n  - F2 (Worker実行): ${(t_f2_worker_end - t_f2_worker_start).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n[F2] メインスレッド待機 (総時間): ${((t_f2_worker_end - t_f2_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2 (Bitmap準備): ${((t_f2_bitmap_end - t_f2_bitmap_start)/1000.0).toFixed(3)} 秒`;
+                            timingLog.textContent += `\n  - F2 (Worker実行): ${((t_f2_worker_end - t_f2_worker_start)/1000.0).toFixed(3)} 秒`;
                         }
                         
                         resolve();
@@ -649,7 +669,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), thumbSheetBitmap]); 
             });
             
-            await workerPromise; // F2 Workerの完了を待つ
+            await workerPromise; 
 
             statusText.textContent = 'ステータス: モザイクアートが完成しました！';
             
@@ -690,7 +710,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             downloadButton.disabled = true;
             if (downloadSpinner) downloadSpinner.style.display = 'inline-block';
 
-            // 2. プリロードが完了したかをチェック
+            // ★ 計測: T3 (F3 Click)
+            t_f3_click = performance.now();
+
+            // 2. プリロードが開始されたかチェック
             if (!preloadPromise) {
                  statusText.textContent = 'エラー: F3プリロードが開始されていません。';
                  isGeneratingFullRes = false;
@@ -703,25 +726,34 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const t_f3_wait_start = performance.now();
             
+            // ★★★ 計測: F3パラメータとユーザー行動ログ ★★★
+            const f3_scale = parseFloat(resolutionScaleInput.value);
+            const f3_quality = parseInt(jpegQualityInput.value) / 100.0;
+            if(timingLog) {
+                timingLog.textContent += `\n--- [F3 PARAMS] ---`;
+                timingLog.textContent += `\n  - Resolution Scale: ${f3_scale}`;
+                timingLog.textContent += `\n  - JPEG Quality: ${f3_quality}`;
+                timingLog.textContent += `\n  - [T1] F3 Preload Start: ${((t_f3_preload_start - t_app_start)/1000.0).toFixed(3)} 秒後`;
+                timingLog.textContent += `\n  - [T2] F1 Click: ${((t_f1_click - t_app_start)/1000.0).toFixed(3)} 秒後`;
+                timingLog.textContent += `\n  - [T3] F3 Click: ${((t_f3_click - t_app_start)/1000.0).toFixed(3)} 秒後`;
+                timingLog.textContent += `\n-----------------------`;
+            }
+            
             // 3. プリロード完了後にF3 Workerを起動する「予約」を入れる
             preloadPromise.then(async () => {
                 // --- ここからF3 Worker起動処理 (プリロード完了後に実行される) ---
                 const t_f3_wait_end = performance.now();
                 if(timingLog) {
-                    timingLog.textContent += `\n[F3] メインスレッド: プリロード待機: ${(t_f3_wait_end - t_f3_wait_start).toFixed(3)} 秒`;
+                    timingLog.textContent += `\n[F3] メインスレッド: プリロード待機: ${((t_f3_wait_end - t_f3_wait_start)/1000.0).toFixed(3)} 秒`;
                 }
                 statusText.textContent = 'ステータス: プリロード完了。F3 Workerを起動します...';
 
                 try {
-                    const t_f3_start = performance.now();
-
                     const lightParams = {
-                        blendOpacity: parseInt(blendRangeInput ? blendRangeInput.value : 30),
-                        edgeOpacity: parseInt(edgeOpacityInput ? edgeOpacityInput.value : 30),
-                        brightnessCompensation: parseInt(brightnessCompensationInput ? brightnessCompensationInput.value : 100)
+                        blendOpacity: parseInt(blendRangeInput.value),
+                        edgeOpacity: parseInt(edgeOpacityInput.value),
+                        brightnessCompensation: parseInt(brightnessCompensationInput.value)
                     };
-                    const scale = parseFloat(resolutionScaleInput ? resolutionScaleInput.value : 1.0);
-                    const quality = parseInt(jpegQualityInput ? jpegQualityInput.value : 90) / 100.0; 
 
                     // F3 Bitmap準備
                     const t_f3_bitmap_start = performance.now();
@@ -751,7 +783,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (e.data.type === 'complete') {
                                 const t_f3_worker_end = performance.now();
                                 
-                                // F3 詳細メトリクスをログに追加
+                                // ★ 計測: F3完了ログ
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-A1 (Load Cache): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
@@ -759,9 +791,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     timingLog.textContent += `\n  - F3-A2 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                                     
-                                    timingLog.textContent += `\n[F3] メインスレッド待機 (総時間): ${(t_f3_worker_end - t_f3_wait_end).toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3 (Bitmap準備): ${(t_f3_bitmap_end - t_f3_bitmap_start).toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3 (Worker実行): ${(t_f3_worker_end - t_f3_worker_start).toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n[F3] メインスレッド待機 (総時間): ${((t_f3_worker_end - t_f3_wait_end)/1000.0).toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3 (Bitmap準備): ${((t_f3_bitmap_end - t_f3_bitmap_start)/1000.0).toFixed(3)} 秒`;
+                                    timingLog.textContent += `\n  - F3 (Worker実行): ${((t_f3_worker_end - t_f3_worker_start)/1000.0).toFixed(3)} 秒`;
                                 }
                                 
                                 const blob = new Blob([e.data.buffer], { type: e.data.mimeType });
@@ -789,8 +821,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             width: mainImage.width,
                             height: mainImage.height,
                             lightParams: lightParams,
-                            scale: scale,
-                            quality: quality
+                            scale: f3_scale, // ★ 計測用に変数を参照
+                            quality: f3_quality // ★ 計測用に変数を参照
                         }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); 
                     });
                     
