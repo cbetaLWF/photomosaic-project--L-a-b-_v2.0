@@ -201,7 +201,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     let thumbSheetImage = null; 
     let isGeneratingPreview = false;
     let preloadPromise = null; 
-
+    
+    // ★★★ 修正点: F3メモリキャッシュ戦略 (Aプラン) ★★★
+    let f3SheetCache = new Map(); // グローバル変数でArrayBufferを保持
 
     // ( ... UIの初期設定 (スライダーリスナー) ... )
     generateButton.disabled = true;
@@ -383,42 +385,45 @@ document.addEventListener('DOMContentLoaded', async () => {
         return Promise.all(running);
     }
     
-    // ★★★ 修正点: F3プリロード戦略 ★★★
+    // ★★★ 修正点: F3プリロード戦略 (Aプラン: メモリキャッシュ) ★★★
     function startF3Preload(tileData) {
         
-        // ★ 修正: F1実行前なので、F3の「全シート」をプリロード対象にする
         const fullSet = tileData.tileSets.full;
         const urlsToPreload = fullSet.sheetUrls;
 
         console.log(`[F3 Preload] F2ロード完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
         t_f3_preload_start = performance.now(); // ★ 計測: T1 (F3 Preload Start)
+        f3SheetCache.clear(); // 古いキャッシュをクリア
         
-        // 3. プリロード (fetch) を実行
         const MAX_PRELOAD_CONCURRENCY = 10;
         
-        const preloadTasks = urlsToPreload.map(url => {
+        const preloadTasks = urlsToPreload.map((url, index) => { // ★ index を取得
             return () => fetch(url, { mode: 'cors' })
                          .then(response => {
                              if (!response.ok) {
                                  throw new Error(`HTTP error ${response.status} for ${url}`);
                              }
-                             // ★ 修正点: response.arrayBuffer() を呼び出し、
-                             // ★ 本体(Body)を強制的にダウンロードさせ、キャッシュを生成する
-                             return response.arrayBuffer(); 
+                             return response.arrayBuffer(); // ★ 本体(Body)をダウンロード
+                         })
+                         .then(buffer => {
+                             // ★ 修正点: ArrayBufferをグローバルMapに保存
+                             f3SheetCache.set(index, buffer);
+                             return buffer.byteLength; // ログ用にサイズを返す
                          })
                          .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err.message));
         });
         
-        // ★ 修正: グローバル変数にPromiseを保持
         preloadPromise = runBatchedLoads(preloadTasks, MAX_PRELOAD_CONCURRENCY);
         
         if(timingLog) timingLog.textContent += `\n[F3 Preload] F3高画質シート (${urlsToPreload.length}枚) のバックグラウンドロード開始...`;
         
-        // ★ 修正: プリロード完了時にもログを出す
-        preloadPromise.then(() => {
+        preloadPromise.then((sizes) => {
             const t_f3_preload_end = performance.now();
-            if(timingLog) timingLog.textContent += `\n[F3 Preload] F3全シートのバックグラウンドロード完了: ${((t_f3_preload_end - t_f3_preload_start)/1000.0).toFixed(3)} 秒`;
+            const totalSizeMB = sizes.reduce((acc, s) => acc + (s || 0), 0) / 1024 / 1024;
+            if(timingLog) {
+                timingLog.textContent += `\n[F3 Preload] F3全シートのバックグラウンドロード完了: ${((t_f3_preload_end - t_f3_preload_start)/1000.0).toFixed(3)} 秒 (${totalSizeMB.toFixed(2)} MB)`;
+            }
         });
     }
 
@@ -439,15 +444,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (downloadButton) downloadButton.style.display = 'none';
         if (progressBar) progressBar.style.width = '0%';
         
-        // ★ 計測: T2 (F1 Click)
-        t_f1_click = performance.now();
+        t_f1_click = performance.now(); // ★ 計測: T2 (F1 Click)
         
-        // ★ 修正: ログをリセット（環境ログは保持）
+        // ( ... ログリセット (変更なし) ... )
         if (timingLog) {
             const envLog = timingLog.innerHTML.split('\n')[0]; 
             timingLog.innerHTML = envLog; 
         }
 
+        // ( ... パラメータ取得 (変更なし) ... )
         const currentHeavyParams = {
             src: mainImage.src,
             tileSize: parseInt(tileSizeInput.value), 
@@ -514,7 +519,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         let finishedWorkers = 0;
         let allResults = [];
         
-        // ( ... チャンク分けロジック ... )
+        // ( ... チャンク分けロジック (変更なし) ... )
         const tileSize = currentHeavyParams.tileSize; 
         const tileHeight = Math.round(tileSize * 1.0); 
         if (tileHeight <= 0) {
@@ -559,14 +564,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         statusText.textContent = 'ステータス: 全ワーカー処理完了。F2プレビュー描画中...';
                         if (progressBar) progressBar.style.width = '100%';
                         
-                        // ★ 修正: F1完了後、F2 Workerを呼び出す
                         await renderMosaicWithWorker(
                             mainCanvas,
                             cachedResults, 
                             currentLightParams
                         );
                         
-                        terminateWorkers(); // F1 Workerを解放
+                        terminateWorkers(); 
                     }
                 }
             };
@@ -577,7 +581,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                  generateButton.disabled = false;
             };
             
-            // F1 Workerに処理を依頼
+            // ( ... F1 Worker 起動 (変更なし) ... )
             worker.postMessage({ 
                 imageData: imageData, 
                 tileData: tileData, 
@@ -710,8 +714,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             downloadButton.disabled = true;
             if (downloadSpinner) downloadSpinner.style.display = 'inline-block';
 
-            // ★ 計測: T3 (F3 Click)
-            t_f3_click = performance.now();
+            t_f3_click = performance.now(); // ★ 計測: T3 (F3 Click)
 
             // 2. プリロードが開始されたかチェック
             if (!preloadPromise) {
@@ -774,6 +777,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                     });
                     const requiredSheetIndicesArray = [...requiredSheetIndices];
                     
+                    // ★★★ 修正点: Aプラン (メモリキャッシュ) ★★★
+                    // 必要なArrayBufferをf3SheetCacheから抽出し、Mapに格納
+                    const buffersToSend = new Map();
+                    const transferList = [];
+                    let totalSendSize = 0;
+                    
+                    for (const index of requiredSheetIndicesArray) {
+                        const buffer = f3SheetCache.get(index);
+                        if (buffer) {
+                            buffersToSend.set(index, buffer);
+                            transferList.push(buffer); // 転送リストに追加
+                            totalSendSize += buffer.byteLength;
+                        } else {
+                            // プリロードが失敗していた場合のフォールバック
+                            console.warn(`[F3] Preload cache missing for sheet ${index}.`);
+                            // Bプラン（WorkerにURLを渡す）へのフォールバックも可能だが、
+                            // 今回はAプランに統一し、失敗したらエラーとする
+                        }
+                    }
+                    if(timingLog) timingLog.textContent += `\n[F3] メインスレッド: Workerへ転送するデータ: ${(totalSendSize / 1024 / 1024).toFixed(2)} MB (${buffersToSend.size}枚)`;
+                    // ★★★ 修正点ここまで ★★★
+                    
+                    
                     const downloadWorker = new Worker('./download_worker.js'); 
                     
                     // F3 Worker実行
@@ -786,8 +812,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 // ★ 計測: F3完了ログ
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    timingLog.textContent += `\n  - F3-A1 (Load Cache): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
-                                    timingLog.textContent += `\n  - F3-A1 (Retries/Fails): ${e.data.retryCount} 回 / ${e.data.failCount} 回`;
+                                    // ★ 修正: F3-A1 は Bitmap変換時間
+                                    timingLog.textContent += `\n  - F3-A1 (Buffer to Bitmap): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚)`;
                                     timingLog.textContent += `\n  - F3-A2 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                                     
@@ -812,18 +838,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (edgeImageBitmap) edgeImageBitmap.close();
                         };
                         
+                        // ★ 修正: ArrayBuffer (Map) を転送
                         downloadWorker.postMessage({
+                            // tileData, cachedResults は変更なし
                             tileData: tileData, 
                             cachedResults: cachedResults,
-                            requiredSheetIndices: requiredSheetIndicesArray, 
+                            
+                            // ★ 修正: requiredSheetIndices (URLリスト) の代わりに buffers (ArrayBuffer Map) を渡す
+                            // requiredSheetIndices: requiredSheetIndicesArray, 
+                            sheetBuffers: buffersToSend,
+                            
                             mainImageBitmap: mainImageBitmap, 
                             edgeImageBitmap: edgeImageBitmap,
                             width: mainImage.width,
                             height: mainImage.height,
                             lightParams: lightParams,
-                            scale: f3_scale, // ★ 計測用に変数を参照
-                            quality: f3_quality // ★ 計測用に変数を参照
-                        }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); 
+                            scale: f3_scale, 
+                            quality: f3_quality
+                        }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), ...transferList]); // ★ ArrayBufferを転送
                     });
                     
                     const blob = await workerPromise;
