@@ -1,3 +1,5 @@
+// mosaic_worker.js (F1:計算 + F2:プレビュー描画 ハイブリッド)
+
 // L*a*b*変換のための定数とヘルパー関数
 const REF_X = 95.047; // D65
 const REF_Y = 100.000;
@@ -27,34 +29,159 @@ function getLstar(r, g, b) {
     return rgbToLab(r, g, b).l;
 }
 
+// ★★★ 修正点: F2描画ロジックを (旧preview_worker.jsから) 移植 ★★★
+async function renderMosaicPreview(
+    canvas, 
+    tileData, 
+    results, // F1の計算結果 (ローカル)
+    mainImageBitmap, 
+    edgeImageBitmap, 
+    thumbSheetBitmap, // F2用のサムネイルBitmap
+    width, height,
+    lightParams
+) {
+    const t_render_start = performance.now(); 
+
+    const canvasWidth = width;
+    const canvasHeight = height;
+    
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, canvasWidth, canvasHeight); 
+    ctx.clip(); 
+
+    const MIN_TILE_L = 5.0; 
+    const MAX_BRIGHTNESS_RATIO = 5.0; 
+    const brightnessFactor = lightParams.brightnessCompensation / 100; 
+
+    const thumbSet = tileData.tileSets.thumb;
+    const thumbTileW = thumbSet.tileWidth;
+    const thumbTileH = thumbSet.tileHeight;
+    
+    // ★ F2描画ループ
+    for (const tileResult of results) {
+        
+        const tileInfo = tileData.tiles[tileResult.tileId];
+        if (!tileInfo) continue;
+        
+        const pattern = tileInfo.patterns.find(p => p.type === tileResult.patternType);
+        if (!pattern) continue;
+        
+        // 1. 明度補正
+        let targetL = tileResult.targetL; 
+        let tileL = pattern.l; 
+        if (tileL < MIN_TILE_L) tileL = MIN_TILE_L; 
+        let brightnessRatio = targetL / tileL; 
+        if (brightnessRatio > MAX_BRIGHTNESS_RATIO) {
+            brightnessRatio = MAX_BRIGHTNESS_RATIO;
+        }
+        const finalBrightness = (1 - brightnessFactor) + (brightnessFactor * brightnessRatio); 
+        ctx.filter = `brightness(${finalBrightness.toFixed(4)})`;
+
+        // 2. 描画座標
+        const dx = tileResult.x;
+        const dy = tileResult.y;
+        const dWidth = tileResult.width;
+        const dHeight = tileResult.height; 
+        
+        // 3. ソース座標
+        const coords = tileInfo.thumbCoords;
+        const sourceSheet = thumbSheetBitmap; 
+        
+        // 4. クロップ計算
+        const sSize = Math.min(thumbTileW, thumbTileH);
+        const isHorizontal = thumbTileW > thumbTileH;
+        
+        let sx = coords.x;
+        let sy = coords.y;
+        
+        const typeParts = tileResult.patternType.split('_'); 
+        const cropType = typeParts[0]; 
+        const flipType = typeParts[1]; 
+        
+        if (isHorizontal) {
+            if (cropType === "cropC") sx += Math.floor((thumbTileW - sSize) / 2);
+            else if (cropType === "cropR") sx += (thumbTileW - sSize);
+        } else {
+            if (cropType === "cropM") sy += Math.floor((thumbTileH - sSize) / 2);
+            else if (cropType === "cropB") sy += (thumbTileH - sSize);
+        }
+
+        // 5. 描画実行
+        ctx.save();
+        if (flipType === "flip1") {
+            ctx.scale(-1, 1);
+            ctx.drawImage(sourceSheet, sx, sy, sSize, sSize, -dx - dWidth, dy, dWidth, dHeight);
+        } else {
+            ctx.drawImage(sourceSheet, sx, sy, sSize, sSize, dx, dy, dWidth, dHeight);
+        }
+        ctx.restore();
+        ctx.filter = 'none';
+    }
+    
+    const t_render_tile_end = performance.now();
+    ctx.restore(); // クリッピングを解除
+
+    // 2段階ブレンド処理
+    if (lightParams.blendOpacity > 0 && mainImageBitmap) {
+        ctx.globalCompositeOperation = 'soft-light'; 
+        ctx.globalAlpha = lightParams.blendOpacity / 100;
+        ctx.drawImage(mainImageBitmap, 0, 0, canvasWidth, canvasHeight);
+    }
+    if (lightParams.edgeOpacity > 0 && edgeImageBitmap) {
+        ctx.globalCompositeOperation = 'multiply'; 
+        ctx.globalAlpha = lightParams.edgeOpacity / 100;
+        ctx.drawImage(edgeImageBitmap, 0, 0, canvasWidth, canvasHeight);
+    }
+    ctx.globalCompositeOperation = 'source-over'; 
+    ctx.globalAlpha = 1.0; 
+    
+    const t_render_blend_end = performance.now();
+    
+    return { 
+        tileTime: t_render_tile_end - t_render_start,
+        blendTime: t_render_blend_end - t_render_tile_end
+    };
+}
+// ★★★ F2ロジック 移植ここまで ★★★
+
+
 // Workerで受け取ったデータとタイルデータ配列を処理
 self.onmessage = async (e) => {
-    // ★ 修正: tileDataは { tileSets: ..., tiles: [...] } というオブジェクトになった
+    
+    const t_f1_start = performance.now();
+    
     const { 
         imageData, tileData, tileSize, width, height, 
         brightnessCompensation, textureWeight,
-        startY, endY 
+        startY, endY,
+        // ★ 修正: F2描画用のデータを追加で受け取る
+        mainImageBitmap, edgeImageBitmap, thumbSheetBitmap, lightParams
     } = e.data;
     
-    // ★ 修正: 解析対象のタイルリストは tileData.tiles に格納されている
     const tiles = tileData.tiles;
     
-    const results = [];
+    // ★ 修正: F1の計算結果 (cachedResults)
+    const results = []; 
     
     const ASPECT_RATIO = 1.0; 
     const tileWidth = tileSize;
     const tileHeight = Math.round(tileSize * ASPECT_RATIO); 
     
-    // ★★★ 修正点: 問題③対応 - usageCountとlastChoiceInRowをハンドラ内部に移動 ★★★
     const usageCount = new Map(); 
     const lastChoiceInRow = new Map();
 
-    self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
+    // self.postMessage({ type: 'status', message: `担当範囲 (Y: ${startY}～${endY}) の処理中...` });
 
     const totalRowsInChunk = Math.ceil((endY - startY) / tileHeight);
     let processedRows = 0;
 
-    // --- メインループ (担当範囲 y = startY から endY まで) ---
+    // --- F1: メインループ (計算) ---
     for (let y = startY; y < endY; y += tileHeight) {
         for (let x = 0; x < width; x += tileWidth) {
             
@@ -62,16 +189,12 @@ self.onmessage = async (e) => {
             const currentBlockWidth = Math.min(tileWidth, width - x);
             const currentBlockHeight = Math.min(tileHeight, height - y);
             
-            // ★ 修正: F1解析ではサムネイル(F2)の正方形クロップサイズを使う
-            // tileData.tileSets.thumb.tileWidth (例: 320)
-            // tileData.tileSets.thumb.tileHeight (例: 180)
             const thumbW = tileData.tileSets.thumb.tileWidth;
             const thumbH = tileData.tileSets.thumb.tileHeight;
-            const sSize = Math.min(thumbW, thumbH); // 解析時の基準サイズ (例: 180)
+            const sSize = Math.min(thumbW, thumbH);
             
             // ( ... 3x3 L*ベクトル計算 (変更なし) ... )
-            // (元画像のimageDataからターゲットベクトルを計算)
-            const oneThirdX = x + Math.floor(currentBlockWidth / 3); // currentBlockWidth (例: 20px)
+            const oneThirdX = x + Math.floor(currentBlockWidth / 3); 
             const twoThirdsX = x + Math.floor(currentBlockWidth * 2 / 3);
             const oneThirdY = y + Math.floor(currentBlockHeight / 3);
             const twoThirdsY = y + Math.floor(currentBlockHeight * 2 / 3);
@@ -102,9 +225,9 @@ self.onmessage = async (e) => {
                 return getLstar(s.r / s.count, s.g / s.count, s.b / s.count);
             });
             
-            // ( ... 最適なタイルを検索するループ ... )
+            // ( ... 最適なタイルを検索するループ (変更なし) ... )
             let bestMatchPattern = null;
-            let bestMatchTileId = -1; // ★ 修正: URLではなくIDを保持
+            let bestMatchTileId = -1; 
             let minDistance = Infinity;
             
             const L_WEIGHT = 0.05; const AB_WEIGHT = 2.0; 
@@ -114,11 +237,9 @@ self.onmessage = async (e) => {
             const TEXTURE_SCALE_FACTOR = 0.5;
             const targetChroma = Math.sqrt(targetLab.a * targetLab.a + targetLab.b_star * targetLab.b_star);
             
-            // ★ 修正: tileData.tiles (tiles) をループ
             for (const tile of tiles) {
                 for (const pattern of tile.patterns) {
-                    
-                    // ( ... 色距離(colorDistance)の計算 (変更なし) ... )
+                    // ( ... 色距離(colorDistance)の計算 ... )
                     const dL = targetLab.l - pattern.l;
                     const dA = targetLab.a - pattern.a;
                     const dB = targetLab.b_star - pattern.b_star;
@@ -128,26 +249,21 @@ self.onmessage = async (e) => {
                     const dynamicChromaPenaltyFactor = (targetChroma < LOW_CHROMA_THRESHOLD) ? HIGH_CHROMA_PENALTY_FACTOR : DEFAULT_CHROMA_PENALTY_FACTOR;
                     const chromaPenalty = chromaDifference * dynamicChromaPenaltyFactor;
                     const colorDistance = baseColorDistance + chromaPenalty;
-
-                    // ( ... 3x3 L*ベクトル距離(textureDistance)の計算 (変更なし) ... )
+                    // ( ... 3x3 L*ベクトル距離(textureDistance)の計算 ... )
                     let textureDistanceSquared = 0;
                     for (let k = 0; k < 9; k++) {
                         const diff = target_l_vector[k] - pattern.l_vector[k];
                         textureDistanceSquared += diff * diff;
                     }
                     const textureDistance = Math.sqrt(textureDistanceSquared);
-
-                    // ( ... 最終距離(totalDistance)の計算 (変更なし) ... )
+                    // ( ... 最終距離(totalDistance)の計算 ... )
                     let totalDistance = colorDistance + (textureDistance * TEXTURE_SCALE_FACTOR * textureWeight);
-
-                    // ( ... 公平性ペナルティ (変更なし) ... )
+                    // ( ... 公平性ペナルティ ... )
                     const patternKey = pattern.l_vector.toString(); 
                     const count = usageCount.get(patternKey) || 0; 
                     const fairnessPenalty = count * 0.5; 
                     totalDistance += fairnessPenalty; 
-
-                    // ( ... 隣接ペナルティ (変更なし) ... )
-                    // ★ 修正: neighborLeft.tileId と tile.id を比較
+                    // ( ... 隣接ペナルティ ... )
                     if (neighborLeft && tile.id === neighborLeft.tileId) {
                         const currentType = pattern.type;
                         const neighborType = neighborLeft.type;
@@ -167,24 +283,19 @@ self.onmessage = async (e) => {
                     if (totalDistance < minDistance) {
                         minDistance = totalDistance;
                         bestMatchPattern = pattern; 
-                        bestMatchTileId = tile.id; // ★ 修正: tile.id を保持
+                        bestMatchTileId = tile.id; 
                     }
-                } // 拡張パターン (6種) のループ終わり
-            } // タイル (tileData.tiles) のループ終わり
+                } 
+            } 
 
-            // ( ... 結果を格納するロジック ... )
+            // ( ... 結果を格納 (変更なし) ... )
             if (bestMatchPattern) {
-                // ★★★ 修正点: タイルの潰れバグを修正 ★★★
-                // 描画サイズは常にフルのタイルサイズ (tileWidth, tileHeight) を指定する。
-                // (currentBlockWidth, currentBlockHeight は分析にのみ使用)
-                // F2/F3の描画側 (main.js / download_worker.js) の ctx.clip() が
-                // Canvasの端からはみ出す部分を自動的にクリップします。
                 results.push({
                     tileId: bestMatchTileId,            
                     patternType: bestMatchPattern.type, 
                     x: x, y: y,
-                    width: tileWidth,     // ★ 修正: currentBlockWidth ではない
-                    height: tileHeight,    // ★ 修正: currentBlockHeight ではない
+                    width: tileWidth,     
+                    height: tileHeight,    
                     targetL: targetLab.l, 
                     tileL: bestMatchPattern.l
                 });
@@ -194,18 +305,55 @@ self.onmessage = async (e) => {
             }
         } // xループの終わり
 
-        // ( ... 進捗報告 (変更なし) ... )
         processedRows++;
         self.postMessage({ type: 'progress', progress: processedRows / totalRowsInChunk });
 
     } // yループの終わり
+    
+    const t_f1_end = performance.now();
+    
+    // ★ 修正: F1が完了したら、F2描画を開始
+    
+    // (F1が並列実行されている場合、このWorkerは担当範囲の結果(results)しか持っていない)
+    // (Fプランでは、F1は並列実行せず、1つのWorkerが全範囲を実行する必要がある)
+    // (→ main.js が startY=0, endY=height で 1回だけ呼び出す前提)
+    
+    if (startY === 0) { // このWorkerが全範囲を担当した場合のみF2描画を実行
+        
+        self.postMessage({ type: 'status', message: `F1計算完了。F2プレビュー描画中...` });
+        
+        const t_f2_start = performance.now();
+        const previewCanvas = new OffscreenCanvas(width, height);
 
-    // 完了と「部分的な」結果を送信
-    self.postMessage({ 
-        type: 'complete', 
-        results: results, 
-        width: width, 
-        height: height, 
-        brightnessCompensation: brightnessCompensation 
-    });
+        // F2描画処理を実行
+        const { tileTime, blendTime } = await renderMosaicPreview(
+            previewCanvas, tileData, results, // results = F1の全計算結果
+            mainImageBitmap, edgeImageBitmap, 
+            thumbSheetBitmap,
+            width, height, lightParams
+        );
+        
+        // F2のImageBitmapに変換
+        const finalBitmap = previewCanvas.transferToImageBitmap();
+        const t_f2_end = performance.now();
+
+        // メインスレッドに結果を返送
+        self.postMessage({ 
+            type: 'complete', 
+            // ★ 修正: F2のBitmapとログのみ返す
+            bitmap: finalBitmap,
+            f1Time: (t_f1_end - t_f1_start) / 1000.0,
+            f2Time: (t_f2_end - t_f2_start) / 1000.0,
+            f2TileTime: tileTime / 1000.0,
+            f2BlendTime: blendTime / 1000.0
+        }, [finalBitmap]); // ImageBitmapを転送
+        
+    } else {
+        // (並列実行された場合 - Fプランではここには来ないはず)
+        // Fプランでは、F1の結果(JSON)だけを返す
+        self.postMessage({ 
+            type: 'f1_chunk_complete', 
+            results: results
+        });
+    }
 };
