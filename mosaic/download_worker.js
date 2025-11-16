@@ -2,7 +2,6 @@
 // Hプラン: F1計算を再実行 + F3高解像度描画 + JPEGエンコード
 
 // ★★★ Hプラン修正: IndexedDBへの依存を削除 ★★★
-// importScripts('https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js'); // 削除
 
 
 // ★★★ Hプラン修正: F1計算ロジックを (mosaic_worker.jsから) 移植 ★★★
@@ -40,7 +39,7 @@ function getLstar(r, g, b) {
  * (mosaic_worker.jsから移植)
  */
 function runF1Calculation(
-    imageData, tileData, tileSize, width, height, textureWeight
+    imageDataArray, tileData, tileSize, width, height, textureWeight // ★ 修正
 ) {
     const tiles = tileData.tiles;
     const results = [];
@@ -75,7 +74,12 @@ function runF1Calculation(
                 const row = (py < oneThirdY) ? 0 : (py < twoThirdsY ? 1 : 2);
                 for (let px = x; px < x + currentBlockWidth; px++) {
                     const i = (py * width + px) * 4;
-                    const r = imageData.data[i]; const g = imageData.data[i + 1]; const b = imageData.data[i + 2];
+
+                    // ★★★ バグ修正: imageData.data[i] ではなく imageDataArray[i] を参照 ★★★
+                    const r = imageDataArray[i]; 
+                    const g = imageDataArray[i + 1]; 
+                    const b = imageDataArray[i + 2];
+
                     r_sum_total += r; g_sum_total += g; b_sum_total += b; pixelCountTotal++;
                     const col = (px < oneThirdX) ? 0 : (px < twoThirdsX ? 1 : 2);
                     const gridIndex = row * 3 + col;
@@ -253,7 +257,7 @@ async function renderMosaicWorker(
         
         // 4. クロップ計算 (変更なし)
         const sSize = Math.min(fullTileW, fullTileH); // 360
-        const isHorizontal = fullTileW > fullH; // true
+        const isHorizontal = fullTileW > fullTileH; // true
         
         let sx = coords.x; 
         let sy = coords.y;
@@ -314,11 +318,12 @@ async function renderMosaicWorker(
 self.onmessage = async (e) => {
     const t_start = performance.now();
     
+    // ★★★ バグ修正: imageData を imageDataArray として受け取る ★★★
     const { 
         tileData,
         
-        // ★★★ Hプラン修正: F1計算用のデータを追加で受け取る ★★★
-        imageData, tileSize, textureWeight,
+        // ★ Hプラン: F1計算用のデータを追加で受け取る
+        imageDataArray, tileSize, textureWeight, // ★ 修正
         
         sheetBitmaps, // Map<number, ImageBitmap> (Cプラン)
         mainImageBitmap, 
@@ -336,7 +341,7 @@ self.onmessage = async (e) => {
         
         // F1計算を実行
         const results = runF1Calculation(
-            imageData, tileData, tileSize, width, height, textureWeight
+            imageDataArray, tileData, tileSize, width, height, textureWeight // ★ 修正
         );
         
         if (!results || results.length === 0) {
