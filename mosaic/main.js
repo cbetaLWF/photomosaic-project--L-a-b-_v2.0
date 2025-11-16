@@ -202,8 +202,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let isGeneratingPreview = false;
     let preloadPromise = null; 
     
-    // ★★★ 修正点: F3メモリキャッシュ戦略 (Aプラン) ★★★
-    let f3SheetCache = new Map(); // グローバル変数でArrayBufferを保持
+    // ★★★ 修正点: F3メモリキャッシュ (Aプラン) を削除 ★★★
+    // let f3SheetCache = new Map(); 
 
     // ( ... UIの初期設定 (スライダーリスナー) ... )
     generateButton.disabled = true;
@@ -385,7 +385,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return Promise.all(running);
     }
     
-    // ★★★ 修正点: F3プリロード戦略 (Aプラン: メモリキャッシュ) ★★★
+    // ★★★ 修正点: F3プリロード戦略 (Bプラン: ブラウザキャッシュ) ★★★
     function startF3Preload(tileData) {
         
         const fullSet = tileData.tileSets.full;
@@ -394,21 +394,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log(`[F3 Preload] F2ロード完了。${urlsToPreload.length}枚のF3スプライトシートのプリロードを開始します。`);
         
         t_f3_preload_start = performance.now(); // ★ 計測: T1 (F3 Preload Start)
-        f3SheetCache.clear(); // 古いキャッシュをクリア
         
         const MAX_PRELOAD_CONCURRENCY = 10;
         
-        const preloadTasks = urlsToPreload.map((url, index) => { // ★ index を取得
-            return () => fetch(url, { mode: 'cors' })
+        const preloadTasks = urlsToPreload.map((url) => { 
+            return () => fetch(url, { mode: 'cors' }) // ★ Bプラン: CORSを一致させる
                          .then(response => {
                              if (!response.ok) {
                                  throw new Error(`HTTP error ${response.status} for ${url}`);
                              }
-                             return response.arrayBuffer(); // ★ 本体(Body)をダウンロード
+                             return response.arrayBuffer(); // ★ Bプラン: キャッシュを生成
                          })
                          .then(buffer => {
-                             // ★ 修正点: ArrayBufferをグローバルMapに保存
-                             f3SheetCache.set(index, buffer);
+                             // ★ 修正点: ArrayBufferは保持しない (Aプラン削除)
+                             // f3SheetCache.set(index, buffer);
                              return buffer.byteLength; // ログ用にサイズを返す
                          })
                          .catch(err => console.warn(`[F3 Preload] プリロード失敗: ${url}`, err.message));
@@ -466,7 +465,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const isTileSizeChanged = lastHeavyParams.tileSize !== currentHeavyParams.tileSize;
         
-        // ★★★ 計測: F1/F2の入力パラメータをログ出力 ★★★
+        // ★★★ 計測: F1/F2の入力パラメータをログ出力 (変更なし) ★★★
         if (timingLog) {
             timingLog.textContent += `\n--- [F1/F2 PARAMS] ---`;
             timingLog.textContent += `\n  - Image Size: ${mainImage.width}x${mainImage.height}`;
@@ -692,7 +691,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const allDownloadParams = [resolutionScaleInput, jpegQualityInput];
 
-        // ★★★ 修正点: F3ダウンロードを「予約」方式に変更 ★★★
+        // ★★★ 修正点: F3ダウンロードを「予約」方式に変更 (Bプラン版) ★★★
         downloadButton.addEventListener('click', () => { // ★ async を削除
             resetParameterStyles(allDownloadParams);
             
@@ -729,7 +728,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             const t_f3_wait_start = performance.now();
             
-            // ★★★ 計測: F3パラメータとユーザー行動ログ ★★★
+            // ★★★ 計測: F3パラメータとユーザー行動ログ (変更なし) ★★★
             const f3_scale = parseFloat(resolutionScaleInput.value);
             const f3_quality = parseInt(jpegQualityInput.value) / 100.0;
             if(timingLog) {
@@ -777,28 +776,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     });
                     const requiredSheetIndicesArray = [...requiredSheetIndices];
                     
-                    // ★★★ 修正点: Aプラン (メモリキャッシュ) ★★★
-                    // 必要なArrayBufferをf3SheetCacheから抽出し、Mapに格納
-                    const buffersToSend = new Map();
-                    const transferList = [];
-                    let totalSendSize = 0;
-                    
-                    for (const index of requiredSheetIndicesArray) {
-                        const buffer = f3SheetCache.get(index);
-                        if (buffer) {
-                            buffersToSend.set(index, buffer);
-                            transferList.push(buffer); // 転送リストに追加
-                            totalSendSize += buffer.byteLength;
-                        } else {
-                            // プリロードが失敗していた場合のフォールバック
-                            console.warn(`[F3] Preload cache missing for sheet ${index}.`);
-                            // Bプラン（WorkerにURLを渡す）へのフォールバックも可能だが、
-                            // 今回はAプランに統一し、失敗したらエラーとする
-                        }
-                    }
-                    if(timingLog) timingLog.textContent += `\n[F3] メインスレッド: Workerへ転送するデータ: ${(totalSendSize / 1024 / 1024).toFixed(2)} MB (${buffersToSend.size}枚)`;
-                    // ★★★ 修正点ここまで ★★★
-                    
+                    // ★★★ 修正点: Aプラン (メモリ転送) を削除 ★★★
+                    // if(timingLog) timingLog.textContent += `\n[F3] メインスレッド: Workerへ転送するデータ...`;
                     
                     const downloadWorker = new Worker('./download_worker.js'); 
                     
@@ -812,8 +791,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 // ★ 計測: F3完了ログ
                                 if (timingLog) {
                                     timingLog.textContent += `\n[F3] Worker 描画/エンコード総時間: ${e.data.totalTime.toFixed(3)} 秒`;
-                                    // ★ 修正: F3-A1 は Bitmap変換時間
-                                    timingLog.textContent += `\n  - F3-A1 (Buffer to Bitmap): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚)`;
+                                    // ★ 修正: F3-A1 は (Load Cache) に戻る
+                                    timingLog.textContent += `\n  - F3-A1 (Load Cache): ${e.data.loadTime.toFixed(3)} 秒 (${e.data.sheetCount}枚, ${e.data.totalLoadSizeMB.toFixed(2)} MB)`;
+                                    timingLog.textContent += `\n  - F3-A1 (Retries/Fails): ${e.data.retryCount} 回 / ${e.data.failCount} 回`;
                                     timingLog.textContent += `\n  - F3-A2 (Draw): ${e.data.renderTime.toFixed(3)} 秒`;
                                     timingLog.textContent += `\n  - F3-B (Encode): ${e.data.encodeTime.toFixed(3)} 秒 (${e.data.finalFileSizeMB.toFixed(2)} MB)`;
                                     
@@ -838,16 +818,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (edgeImageBitmap) edgeImageBitmap.close();
                         };
                         
-                        // ★ 修正: ArrayBuffer (Map) を転送
+                        // ★ 修正: Bプラン (URLリスト) を転送
                         downloadWorker.postMessage({
-                            // tileData, cachedResults は変更なし
                             tileData: tileData, 
                             cachedResults: cachedResults,
-                            
-                            // ★ 修正: requiredSheetIndices (URLリスト) の代わりに buffers (ArrayBuffer Map) を渡す
-                            // requiredSheetIndices: requiredSheetIndicesArray, 
-                            sheetBuffers: buffersToSend,
-                            
+                            requiredSheetIndices: requiredSheetIndicesArray, // ★ 修正: URLリストを渡す
+                            // sheetBuffers: buffersToSend, // ★ 修正: Aプラン削除
                             mainImageBitmap: mainImageBitmap, 
                             edgeImageBitmap: edgeImageBitmap,
                             width: mainImage.width,
@@ -855,7 +831,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             lightParams: lightParams,
                             scale: f3_scale, 
                             quality: f3_quality
-                        }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : []), ...transferList]); // ★ ArrayBufferを転送
+                        }, [mainImageBitmap, ...(edgeImageBitmap ? [edgeImageBitmap] : [])]); // ★ ArrayBuffer転送を削除
                     });
                     
                     const blob = await workerPromise;
